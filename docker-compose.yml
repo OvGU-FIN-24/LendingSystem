@@ -1,47 +1,73 @@
+# Production stack. See docs/deploy/operations.md.
+# Only the frontend publishes a port (plain HTTP); TLS is terminated upstream
+# or by the optional overlay compose.tls.yml.
+name: lendingsystem
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   database:
-    image: mysql:9.0.1
-    expose:
-      - 3310
-    ports:
-      - 3310:3306
+    image: mysql:9.7.2
+    restart: unless-stopped
+    logging: *logging
     volumes:
       - database-data:/var/lib/mysql
     environment:
-      - MYSQL_ROOT_PASSWORD_FILE=/run/secrets/db-password
-      - MYSQL_DATABASE=LendingSystem
+      MYSQL_DATABASE: LendingSystem
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/db-root-password
+      MYSQL_USER: ${DB_APP_USER:-lending}
+      MYSQL_PASSWORD_FILE: /run/secrets/db-app-password
     secrets:
-      - db-password
+      - db-root-password
+      - db-app-password
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      # TCP ping: the temporary init server runs with --skip-networking
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 60s
     networks:
       - database
-      - public
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      additional_contexts:
+        templates: ./templates
+    restart: unless-stopped
+    logging: *logging
     hostname: container
     depends_on:
       database:
         condition: service_healthy
-    expose:
-      - 5000
-    ports:
-      - 5000:5000
     volumes:
       - pdf-files:/backend/pdfs
       - image-files:/backend/pictures
       - template-files:/backend/templates
     env_file:
       - backend.env
+    # Infrastructure settings; they override values from backend.env
+    environment:
+      database_host: database
+      database_port: "3306"
+      database_name: LendingSystem
+      database_user: ${DB_APP_USER:-lending}
+      database_password: ""
+      database_password_location: /run/secrets/db-app-password
+      root_directory: /backend/
+      picture_directory: pictures
+      pdf_directory: pdfs
+      template_directory: templates
     secrets:
-      - db-password
+      - db-app-password
     healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:5000/health"]
-      interval: 10s
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:5000/health',timeout=3)"]
+      interval: 15s
       timeout: 5s
       retries: 5
       start_period: 30s
@@ -51,18 +77,24 @@ services:
 
   frontend:
     build: ./frontend
+    restart: unless-stopped
+    logging: *logging
     depends_on:
       backend:
         condition: service_healthy
-    expose:
-      - 80
-      - 443
     ports:
-      - 80:80
-      - 443:443
+      - "${HTTP_PORT:-80}:8080"
+    environment:
+      TRUSTED_PROXY_CIDR: ${TRUSTED_PROXY_CIDR:-127.0.0.1/32}
     volumes:
-      - pdf-files:/var/www/html/pdfs
-      - image-files:/var/www/html/pictures
+      - pdf-files:/var/www/html/pdfs:ro
+      - image-files:/var/www/html/pictures:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
       - public
 
@@ -78,5 +110,7 @@ networks:
   public:
 
 secrets:
-  db-password:
-    file: db-password.txt
+  db-root-password:
+    file: ${DB_ROOT_PASSWORD_FILE:-./secrets/db-root-password.txt}
+  db-app-password:
+    file: ${DB_APP_PASSWORD_FILE:-./secrets/db-app-password.txt}

@@ -189,3 +189,6 @@ alembic.ini
 db-password.txt
 
 *.sql
+# Deployment secrets and local overrides
+secrets/
+compose.override.yml
