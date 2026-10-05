@@ -19,6 +19,7 @@ pdf_directory=pdfs
 template_directory=templates
 session_cookie_secure=0
 ```
+- CORS is off by default (same origin). When the dev frontend (`npm start`, port 3000) talks to the backend on port 5000 directly, add `cors_origins=http://localhost:3000` to `backend.env`.
 ## For Backend
 ### Install requirements
 ```shell

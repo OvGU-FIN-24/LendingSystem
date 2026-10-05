@@ -9,7 +9,7 @@ The stack has three services:
 | Service | Image | Role |
 |---------|-------|------|
 | `frontend` | `nginxinc/nginx-unprivileged` (built from `frontend/`) | Serves the web app, `/pictures/` and `/pdf/`; forwards `/api/` to the backend. Listens on 8080 inside the container. |
-| `backend` | `python:3.12-slim` (built from `backend/`) | GraphQL API (gunicorn, one worker), runs as uid 10001. |
+| `backend` | `python:3.12.15-slim` (built from `backend/`) | GraphQL API (gunicorn, one worker), runs as uid 10001. |
 | `database` | `mysql:9.7.2` (LTS) | Data. Reachable only from the backend. |
 
 Only the frontend publishes a port: `HTTP_PORT` (default `80`). It serves **plain HTTP**. TLS is expected to be terminated in front of the stack by a reverse proxy or load balancer, which must send `X-Forwarded-Proto` and `X-Forwarded-For`. If there is no such proxy, use the Let's Encrypt overlay ([HTTPS with Let's Encrypt](#https-with-lets-encrypt)).
@@ -33,7 +33,7 @@ Requirements: Docker Engine with Docker Compose v2.23.1 or newer (`docker compos
 |-----|---------|---------|
 | `COMPOSE_PROJECT_NAME` | `lendingsystem` | Only set this when upgrading an old deployment whose volumes have a different prefix. |
 | `HTTP_PORT` | `80` | Published port, `[ip:]port`. Use e.g. `127.0.0.1:8080` when the reverse proxy runs on the same host. |
-| `TRUSTED_PROXY_CIDR` | `127.0.0.1/32` | IP or CIDR of the reverse proxy. Its `X-Forwarded-For` header is used as the client IP in the access log. |
+| `TRUSTED_PROXY_CIDR` | `127.0.0.1/32` | IP or CIDR of the reverse proxy, as nginx sees it. Its `X-Forwarded-For` header is used as the client IP in the access log (logging only). A proxy on the same host reaches nginx through Docker's port forwarding, so nginx sees the gateway of the `<project>_public` network, not `127.0.0.1`; see [Trusted proxy address](#trusted-proxy-address). |
 | `DB_APP_USER` | `lending` | DB user of the backend. |
 | `DB_ROOT_PASSWORD_FILE`, `DB_APP_PASSWORD_FILE` | `./secrets/…` | Secret file paths. |
 | `COMPOSE_FILE`, `DOMAIN`, `ACME_EMAIL` | unset | Only for the Let's Encrypt overlay. |
@@ -76,7 +76,7 @@ docker compose up -d --build
 docker compose ps                 # wait until all services are "healthy" (first start: about 1–2 minutes)
 ```
 
-On the first start MySQL creates the database `LendingSystem` and the user `DB_APP_USER`. The backend creates the tables and the initial administrator. The volumes `template-files` and `image-files` are seeded with the default templates and the placeholder picture.
+On the first start MySQL creates the database `LendingSystem` and the user `DB_APP_USER`. The backend creates the tables and the initial administrator. The volumes `template-files` and `image-files` are seeded with the default templates and the placeholder picture. Docker seeds a volume only if it is empty when first mounted; existing content is never overwritten. See [Placeholder picture](#placeholder-picture).
 
 Then point the reverse proxy at `http://<host>:HTTP_PORT`. It must set `X-Forwarded-Proto: https` and `X-Forwarded-For`, and allow request bodies of at least 100 MB (file uploads).
 
@@ -122,6 +122,8 @@ This applies to deployments started from the old `docker-compose.yml` (MySQL 9.0
 
 6. **Update `backend.env`:** make sure `secret_key` is set and add `session_cookie_secure=1`. The database and path keys can be removed; compose overrides them anyway.
 
+   **Mail on port 465:** the old version always used implicit TLS, whatever `use_ssl` said. The new version uses implicit TLS only with `use_ssl=1` and STARTTLS otherwise. If `mail_server_port` is `465`, set `use_ssl=1`; otherwise mail sending times out.
+
 7. **Start and upgrade the database:**
 
    ```sh
@@ -157,6 +159,14 @@ This applies to deployments started from the old `docker-compose.yml` (MySQL 9.0
 
     - If the old `template-files` volume was empty, it has now been filled with the default templates.
     - If it contained your own templates, they are kept unchanged.
+    - The old `image-files` volume is not empty, so the placeholder picture was **not** seeded. Add it if it is missing (an existing file is never overwritten):
+
+      ```sh
+      docker compose exec backend test -e /backend/pictures/1741980710.2106326_platzhalter_bild.png \
+        || docker compose cp backend/static-seed/platzhalter_bild.png backend:/backend/pictures/1741980710.2106326_platzhalter_bild.png
+      ```
+
+      Check: `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:${HTTP_PORT:-80}/pictures/1741980710.2106326_platzhalter_bild.png` returns `200`.
 
 **Rollback:** `docker compose down`, remove the database volume (`docker volume rm ${P}_database-data`), check out the previous version, put `db-password.txt` back, start the old stack and restore the dump from step 1 ([Restore](#restore)), using secret name `db-password` instead of `db-root-password`.
 
@@ -226,6 +236,32 @@ Then run `docker compose up -d` and check with `docker compose logs caddy` that 
 Certificates are stored in the `caddy-data` volume. Back it up; losing it forces a new issuance, and Let's Encrypt rate-limits repeated issuance.
 
 Local test: with `DOMAIN=localhost`, Caddy uses its own internal CA instead of Let's Encrypt (`curl -k https://localhost/`).
+
+## Placeholder picture
+
+Items without pictures show `/pictures/1741980710.2106326_platzhalter_bild.png`. The backend image contains a neutral default (`backend/static-seed/platzhalter_bild.png`), which Docker copies into the `image-files` volume only when the volume is empty at first start. It never overwrites an existing file.
+
+- **Missing after an upgrade:** run the command from upgrade step 12.
+- **Use your own picture:** copy it over the default (PNG recommended; the file name must stay the same):
+
+  ```sh
+  docker compose cp my-placeholder.png backend:/backend/pictures/1741980710.2106326_platzhalter_bild.png
+  ```
+
+  It is kept across updates, because the volume is not re-seeded.
+
+## Trusted proxy address
+
+`TRUSTED_PROXY_CIDR` only affects the client IP in the frontend access log. It must match the address nginx sees for the reverse proxy:
+
+- **Proxy on another host:** that host's IP, e.g. `10.0.0.5/32`.
+- **Proxy on the same host** (e.g. `HTTP_PORT=127.0.0.1:8080`): connections arrive from the gateway of the compose network. Look it up after the first start and put it (or the whole subnet) into `.env`, then run `docker compose up -d` again:
+
+  ```sh
+  docker network inspect lendingsystem_public --format '{{(index .IPAM.Config 0).Gateway}} {{(index .IPAM.Config 0).Subnet}}'
+  ```
+
+  Replace `lendingsystem` if you set `COMPOSE_PROJECT_NAME`. Only trust addresses that clients cannot reach directly.
 
 ## Editing templates
 

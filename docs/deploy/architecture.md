@@ -56,11 +56,11 @@ flowchart LR
 | `.env.example` (new) | §4.1 |
 | `backend.env.example` (new) | §4.2 (replaces the README block). `git check-ignore` confirms that `*.env` does not match `*.env.example`. |
 | `.gitignore` | Add `secrets/` and `compose.override.yml`. |
-| `backend/Dockerfile` | `FROM python:3.12.15-slim`; `apt-get install --no-install-recommends pkg-config default-libmysqlclient-dev build-essential`, then `pip install --no-cache-dir -r requirements.txt`, then purge `build-essential` in the same layer; `COPY . /backend/`; `COPY --from=templates . /backend/templates/`; copy placeholder `backend/static-seed/platzhalter_bild.png` (inside the backend build context) into `/backend/pictures/1741980710.2106326_platzhalter_bild.png` (seeds the `image-files` volume by copy-up, E8); `RUN useradd -u 10001 -U app && mkdir -p pictures pdfs && chown -R 10001:10001 pictures pdfs templates`; `USER 10001`; `CMD gunicorn -w 1 --timeout 120 --access-logfile - -b 0.0.0.0:5000 app:app`. `requirements.txt` stays UTF-16 (pip handles the BOM, E20); converting it is out of scope. `setuptools<81` is pinned after the requirements because gunicorn 20.1.0 imports `pkg_resources`. |
+| `backend/Dockerfile` | `FROM python:3.12.15-slim`; `ENV PYTHONUNBUFFERED=1`; `COPY requirements.txt` first (layer cache); `apt-get install --no-install-recommends pkg-config default-libmysqlclient-dev build-essential`, then `pip install --no-cache-dir -r requirements.txt` and `pip install setuptools==80.9.0`, then purge `build-essential` in the same layer; `COPY . /backend/`; `COPY --from=templates . /backend/templates/`; copy placeholder `backend/static-seed/platzhalter_bild.png` (inside the backend build context) into `/backend/pictures/1741980710.2106326_platzhalter_bild.png` (seeds the `image-files` volume by copy-up, E8); `RUN useradd -u 10001 -U -M -d /backend app && mkdir -p pictures pdfs templates && chown -R 10001:10001 pictures pdfs templates`; `USER 10001`; `CMD gunicorn -w 1 --timeout 120 --access-logfile - -b 0.0.0.0:5000 app:app`. `requirements.txt` stays UTF-16 (pip handles the BOM, E20); converting it is out of scope. `setuptools==80.9.0` is pinned after the requirements because gunicorn 20.1.0 imports `pkg_resources`, which setuptools ≥ 81 removed. Follow-up: upgrade to gunicorn ≥ 23 (fixes CVE-2024-1135/CVE-2024-6827, no `pkg_resources`) and drop the pin. |
 | `backend/.dockerignore` | Unchanged (alembic stays excluded, D10). |
 | `backend/config.py` | `app.debug = False` (was `True`). `SESSION_COOKIE_SECURE = os.getenv('session_cookie_secure','1') == '1'`; `SESSION_COOKIE_HTTPONLY=True`; `SESSION_COOKIE_SAMESITE='Lax'`. CORS: delete the wildcard; `CORS(...)` only if `cors_origins` (comma list) is set, otherwise no CORS headers (same origin). Fail fast if `secret_key` is empty (`raise SystemExit`). Remove `import redis` (unused, E20). |
 | `backend/app.py` | `graphiql = os.getenv('graphiql','0') == '1'` instead of `True`. |
-| `backend/sendMail.py` | `use_ssl == '1'` → `SMTP_SSL(..., context=ssl.create_default_context())`; otherwise `SMTP(...)` + `starttls(context=…)`. If `mail_server_address` is empty: log "mail disabled" and return (no retry). Empty or missing `use_ssl` = STARTTLS (no `int()` crash, E14). The unbounded retry loop is unchanged (security review, §7.13). |
+| `backend/sendMail.py` | `use_ssl == '1'` → `SMTP_SSL(..., context=ssl.create_default_context(), timeout=30)`; otherwise `SMTP(..., timeout=30)` + `starttls(context=…)`. Behavior change: the old code used implicit TLS for every `use_ssl` value, so port 465 now needs `use_ssl=1` (§6 step 6). If `mail_server_address` is empty: log "Mail disabled" with the subject only (no recipient) and return (no retry). Empty or missing `use_ssl` = STARTTLS (no `int()` crash, E14). The unbounded retry loop is unchanged (security review, §7.13). |
 | `frontend/.env` (tracked) | `REACT_APP_BACKEND_URL=/api/graphql`, `REACT_APP_PICTURES_BASE_URL=/pictures/`, `REACT_APP_PDFS_BASE_URL=/pdf/`. |
 | `frontend/src/components/requests/EditRequest.tsx:773` | `'http://192.168.178.169/pdfs/'` → `process.env.REACT_APP_PDFS_BASE_URL` (fixes the `/pdfs` vs `/pdf` mismatch). |
 | `frontend/src/index.tsx:33`, `frontend/src/components/AGB/AGBPopUp.tsx:147` | `workerUrl='/pdf.worker.min.js'` (local, same origin). Drop the then-unused `pdfjsVersion`/`packageJson` imports where they become unused (ESLint). |
@@ -81,7 +81,7 @@ Not changed: `backend/app.py` schema/root-user bootstrap (D10), `hostname: conta
 | `COMPOSE_PROJECT_NAME` | (commented) | Set only if the old deployment's volume prefix ≠ `lendingsystem` (§6, step 0). |
 | `HTTP_PORT` | `80` | Published entry; `[ip:]port`, e.g. `127.0.0.1:8080` when the upstream proxy is on the same host. |
 | `TRUSTED_PROXY_CIDR` | `127.0.0.1/32` | IP/CIDR of the upstream proxy whose `X-Forwarded-For` nginx trusts. |
-| `DB_APP_USER` | `lending` | Backend DB user. `root` is possible as a legacy fallback (not recommended). |
+| `DB_APP_USER` | `lending` | Backend DB user. Must not be `root` (the MySQL image rejects `MYSQL_USER=root`). |
 | `DB_ROOT_PASSWORD_FILE` / `DB_APP_PASSWORD_FILE` | `./secrets/db-root-password.txt` / `./secrets/db-app-password.txt` | Secret file paths. |
 | `COMPOSE_FILE` | (commented) `docker-compose.yml:compose.tls.yml` | Enables the LE overlay. |
 | `DOMAIN`, `ACME_EMAIL` | (commented) | Only with `compose.tls.yml`. |
@@ -122,20 +122,20 @@ All services: `restart: unless-stopped` and json-file logging with 10m×3.
 Old state: project = directory name, MySQL 9.0.1 runs as root with `db-password.txt` as the root password, and ports 3310, 5000, 80 and 443 are published.
 
 0. **Identify the project name.** Run `docker volume ls | grep database-data`. The prefix before `_database-data` is the project name. If it is not `lendingsystem`, put `COMPOSE_PROJECT_NAME=<prefix>` into `.env`.
-1. **Back up (mandatory; the 9.7 data dir cannot go back to 9.0).** Use the old stack while it is running: `docker compose exec database sh -c 'mysqldump -uroot -p"$(cat /run/secrets/db-password)" --single-transaction --routines --databases LendingSystem' > backup-$(date +%F).sql`. Then tar the volumes (`image-files`, `pdf-files`, `template-files`) as in §8.
+1. **Back up (mandatory; the 9.7 data dir cannot go back to 9.0).** Use the old stack while it is running: `docker compose exec -T database sh -c 'mysqldump -uroot -p"$(cat /run/secrets/db-password)" --single-transaction --routines --set-gtid-purged=OFF --databases LendingSystem' > backup-$(date +%F).sql`. Then tar the volumes (`image-files`, `pdf-files`, `template-files`) as in §8.
 2. Run `docker compose down`. **Never use `-v`.**
 3. Check out the new version.
 4. Run `cp .env.example .env`. Set `HTTP_PORT` and `TRUSTED_PROXY_CIDR` (and `COMPOSE_PROJECT_NAME` from step 0).
 5. Set up the secrets: `install -d -m 700 secrets && mv db-password.txt secrets/db-root-password.txt`, then generate `secrets/db-app-password.txt` (§4.3).
-6. In `backend.env`, add `session_cookie_secure=1`, make sure `secret_key` is set, and remove the DB/path keys (optional; compose overrides them).
+6. In `backend.env`, add `session_cookie_secure=1`, make sure `secret_key` is set, and remove the DB/path keys (optional; compose overrides them). If `mail_server_port` is 465, set `use_ssl=1` (the old code always used implicit TLS; the new one uses STARTTLS unless `use_ssl=1`).
 7. Run `docker compose up -d database` and wait until it is `healthy`. MySQL upgrades the data dir in place from 9.0.1 to 9.7.2; check the log for `Server upgrade from '90001' to '90702' completed`.
 8. Create the app user:
-   `docker compose exec database sh -c 'mysql -uroot -p"$(cat /run/secrets/db-root-password)" -e "CREATE USER IF NOT EXISTS \`lending\`@\`%\` IDENTIFIED BY '"'"'$(cat /run/secrets/db-app-password)'"'"'; GRANT ALL PRIVILEGES ON \`LendingSystem\`.* TO \`lending\`@\`%\`;"'`
+   `docker compose exec -T database sh -c 'mysql -uroot -p"$(cat /run/secrets/db-root-password)" -e "CREATE USER IF NOT EXISTS \`lending\`@\`%\` IDENTIFIED BY '"'"'$(cat /run/secrets/db-app-password)'"'"'; GRANT ALL PRIVILEGES ON \`LendingSystem\`.* TO \`lending\`@\`%\`;"'`
    `operations.md` has a copyable heredoc version.
-9. Fix upload ownership (the old backend wrote files as root): `docker compose run --rm --no-deps --user root --entrypoint chown backend -R 10001:10001 /backend/pictures /backend/pdfs`.
+9. Fix upload ownership (the old backend wrote files as root): `docker compose run --rm --no-deps --user root --entrypoint chown backend -R 10001:10001 /backend/pictures /backend/pdfs /backend/templates`.
 10. Run `docker compose up -d --build` and confirm that `docker compose ps` shows all services healthy.
 11. Repoint the upstream proxy from the old `:80/:443` to `HTTP_PORT` (plain HTTP). It must set `X-Forwarded-Proto: https` and `X-Forwarded-For`.
-12. Verify A6–A8 (§10). Templates: if `template-files` was empty it is now seeded (K4). If it was not empty, check the imprint and privacy content.
+12. Verify A6–A8 (§10). Templates: if `template-files` was empty it is now seeded (K4). If it was not empty, check the imprint and privacy content. Placeholder: the old `image-files` volume is not empty, so copy-up does not seed it; add it only if missing (`docker compose exec backend test -e <path> || docker compose cp backend/static-seed/platzhalter_bild.png backend:<path>`, path `/backend/pictures/1741980710.2106326_platzhalter_bild.png`). Operators override the default with the same `docker compose cp` and their own image; it is never overwritten.
 
 Rollback: stop the new stack, remove `database-data`, check out the old version, start `mysql:9.0.1` and restore the dump from step 1.
 
@@ -158,7 +158,7 @@ Not chosen: a Caddy compose profile, because it cannot unpublish the frontend po
 
 ## 8. Backup and restore (manual, D6=a)
 
-- DB: run `mysqldump` through `docker compose exec database` with the root secret (as in §6 step 1, but with secret `db-root-password`).
+- DB: run `mysqldump --single-transaction --routines --set-gtid-purged=OFF --databases LendingSystem` through `docker compose exec -T database` with the root secret (as in §6 step 1, but with secret `db-root-password`). Without `--set-gtid-purged=OFF` the restore fails with `ERROR 3546`.
 - Files: `for v in image-files pdf-files template-files caddy-data; do docker run --rm -v ${P}_$v:/v:ro -v "$PWD":/b alpine:3.22 tar czf /b/$v.tgz -C /v .; done` (`P` = project name).
 - Restore: `docker compose up -d database`, then `docker compose exec -T database sh -c 'mysql -uroot -p"$(cat /run/secrets/db-root-password)"' < backup.sql`. Untar into the volumes with `docker compose stop backend frontend` first. Then run the chown from §6 step 9 and `docker compose up -d`.
 
@@ -167,7 +167,7 @@ Not chosen: a Caddy compose profile, because it cannot unpublish the frontend po
 - **Q1 (decided):** MySQL target `9.7.2` LTS.
 - **Q2 (decided):** No new automated tests for the app changes; covered by the smoke checks A6, A7, A15–A17 plus a manual mail test when SMTP is available.
 - **Q3 (decided):** The upgrade guide covers both cases (custom content and empty `template-files` volume).
-- **Q4 (decided):** Ship a new neutral placeholder PNG.
+- **Q4 (decided):** Ship a new neutral placeholder PNG as the default. Operators may override it; it is never overwritten (copy-up seeds only an empty volume; upgrades add it only if missing, see operations.md "Placeholder picture").
 - Open: verify secret file readability for uid 10001 on a Linux host (K10); verified only on Docker Desktop.
 - Verified: `location /api/` → `proxy_pass …/` maps `/api/graphql` to `/graphql` (A6).
 - Risk: `frontend/.env` is tracked, so future secrets would leak (§7.14 of requirements). It now holds only relative paths; this is noted for the security review.
@@ -194,7 +194,7 @@ Not chosen: a Caddy compose profile, because it cannot unpublish the frontend po
 | A15 | `GET /pictures/` and `GET /pdf/` (directory) | 403/404, no listing | S2 |
 | A16 | `GET /api/graphql` with `Accept: text/html` | no GraphiQL page | S1 |
 | A17 | Built bundle has no `unpkg.com`; a PDF opens in the UI (AGB popup) | grep 0 hits; viewer renders | S2 |
-| A18 | Upgrade rehearsal: old compose at `58b5701` with `mysql:9.0.1` + sample data → §6 steps | data intact, login works, uploads writable, `template-files` seeded | S6 |
+| A18 | Upgrade rehearsal: old compose at `58b5701` with `mysql:9.0.1` + sample data → §6 steps | data intact, login works, uploads writable, `template-files` seeded, placeholder `GET /pictures/1741980710.2106326_platzhalter_bild.png` 200 after step 12 | S6 |
 
 ## 11. Implementation stories
 
