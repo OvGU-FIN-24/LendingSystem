@@ -83,8 +83,9 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
 app.secret_key = secret_key
 app.config['SESSION_TYPE'] = 'sqlalchemy'
-# Secure cookie by default; set session_cookie_secure=0 only for plain-HTTP tests
-app.config['SESSION_COOKIE_SECURE'] = os.getenv('session_cookie_secure', '1') == '1'
+# Secure cookie by default; session_cookie_secure=0 only for plain-HTTP tests
+app.config['SESSION_COOKIE_SECURE'] = (
+    os.getenv('session_cookie_secure', '1') == '1')
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.permanent_session_lifetime = timedelta(hours=2)
@@ -92,9 +93,11 @@ app.permanent_session_lifetime = timedelta(hours=2)
 app.config['SQLALCHEMY_DATABASE_URI'] = database_connection_string
 
 # Same origin by default; cors_origins (comma list) enables cross-origin access
-cors_origins = [o.strip() for o in os.getenv('cors_origins', '').split(',') if o.strip()]
+cors_origins = [o.strip() for o in os.getenv('cors_origins', '').split(',')
+                if o.strip()]
 if cors_origins:
-    CORS(app, resources={r"/*": {"origins": cors_origins}}, supports_credentials=True)
+    CORS(app, resources={r"/*": {"origins": cors_origins}},
+         supports_credentials=True)
 server_session = Session(app)
 
 # Create scheduler for automated mail sending
