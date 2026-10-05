@@ -1,63 +1,23 @@
 # LendingSystem
-## Config file
-- create a backend.env file in the LendingSystem directory
-```env
-# Config file for the LendingSystem 
+## Deployment
+Production deployment with Docker Compose (configuration, first deployment, upgrade, backup and restore, optional HTTPS): see [docs/deploy/operations.md](docs/deploy/operations.md).
 
-################################
-# Config of the mysql database #
-################################
+## Config file for local development
+- copy `backend.env.example` to `backend.env` in the LendingSystem directory and fill it in
+- for running the backend outside Docker, additionally set the database and path keys:
+```env
 database_host=
 database_name=
 database_port=
-
-# mysql user needs rights to create tables and add, edit and deletes entries
 database_user=
-
-# define either the location for a database password file (for docker usage)
-# or directly the password, leave the unused option empty
-
-# location of the db password file -> simple text file with only the password in it
-# database_password_location=/run/secrets/db-password # for the docker container 
+# either a password file or the password itself
 database_password_location=../db-password.txt
-
-# database password
 database_password=
-
-################################
-# define paths for the storage #
-# of files                     #
-################################
-# root_directory=/backend/ # for container usage
 root_directory=../
-
 picture_directory=pictures
 pdf_directory=pdfs
 template_directory=templates
-
-################################
-# flask session secret key     #
-################################
-secret_key=
-
-################################
-# config for the mail to send  #
-# reminder and password reset  #
-# mails                        #
-################################
-mail_server_address=
-mail_server_port=
-use_ssl= # 0 for no; 1 for yes
-sender_email_address=
-sender_email_password=
-
-################################
-# application settings         #
-################################
-root_user_name=root
-root_user_password=Passw0rd!
-
-timezone=Europe/Berlin
+session_cookie_secure=0
 ```
 ## For Backend
 ### Install requirements
