@@ -8,16 +8,16 @@ from datetime import datetime, timedelta
 
 def sendMail(receiver, subject, body):
     if not mail_server_address:
-        print("Mail disabled (mail_server_address not set): not sending '" + subject + "' to " + receiver)
+        print("Mail disabled (mail_server_address not set): not sending '" + subject + "'")
         return
 
     try:
         # create Mail Server: use_ssl=1 -> implicit TLS (465), otherwise STARTTLS (587)
         context = ssl.create_default_context()
         if use_ssl == '1':
-            mail_server = smtplib.SMTP_SSL(mail_server_address, mail_server_port, context=context)
+            mail_server = smtplib.SMTP_SSL(mail_server_address, mail_server_port, context=context, timeout=30)
         else:
-            mail_server = smtplib.SMTP(mail_server_address, mail_server_port)
+            mail_server = smtplib.SMTP(mail_server_address, mail_server_port, timeout=30)
             mail_server.starttls(context=context)
 
         mail_server.login(sender_email_address, sender_email_password)
