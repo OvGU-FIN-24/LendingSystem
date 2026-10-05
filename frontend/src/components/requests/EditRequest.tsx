@@ -770,7 +770,7 @@ function EditRequestScreen({ orderId, isUser }: EditRequestProps) {
                                 ref={textRef} 
                                 style={{ margin: 0, padding: '10px', maxHeight: '400px', overflowY: 'auto' }}
                             >
-                                <Viewer fileUrl={'http://192.168.178.169/pdfs/' + selectedManualPath}  plugins={[zoomPluginInstance]}/>
+                                <Viewer fileUrl={process.env.REACT_APP_PDFS_BASE_URL + selectedManualPath}  plugins={[zoomPluginInstance]}/>
                         </div>
                         <div>
                           <button

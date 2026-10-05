@@ -30,7 +30,7 @@ root.render(
         <CartProvider>
           <ToasterProvider>
             <LoginStatusProvider>
-              <Worker workerUrl='https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js'>
+              <Worker workerUrl='/pdf.worker.min.js'>
                 <App />
               </Worker>
             </LoginStatusProvider>

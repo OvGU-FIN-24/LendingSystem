@@ -1,27 +1,25 @@
-# Dockerfile für das React-Frontend und Nginx
-FROM node:18 AS build
+# React build
+FROM node:24.21.0-alpine AS build
 
-# Arbeitsverzeichnis setzen
 WORKDIR /app
 
-# Quellcode kopieren
+COPY package.json package-lock.json ./
+RUN npm ci
+
 COPY . .
-# RUN npx update-browserslist-db@latest
-RUN npm install
+# No source maps in the production image (they would ship the full source)
+ENV GENERATE_SOURCEMAP=false
+# Serve the PDF.js worker from the same origin, matching the installed pdfjs-dist version
+RUN cp node_modules/pdfjs-dist/build/pdf.worker.min.js public/ \
+    && npm run build
 
-# Build des React-Frontends
-RUN npm run build
+# Static files and reverse proxy, unprivileged nginx (uid 101, port 8080)
+FROM nginxinc/nginx-unprivileged:1.30.5-alpine
 
-# Nginx verwenden, um die statischen Dateien zu dienen
-FROM nginx:alpine
+ENV NGINX_ENVSUBST_FILTER=TRUSTED_
+ENV TRUSTED_PROXY_CIDR=127.0.0.1/32
+
 COPY --from=build /app/build /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/nginx.conf
+COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template
 
-# Create folder for pictures and pdfs
-RUN mkdir /usr/share/nginx/html/pdf
-RUN chmod -R 755 /usr/share/nginx/html/pdf
-RUN mkdir /usr/share/nginx/html/images
-RUN chmod -R 755 /usr/share/nginx/html/images
-
-# Exponiere den Port
-EXPOSE 80
+EXPOSE 8080

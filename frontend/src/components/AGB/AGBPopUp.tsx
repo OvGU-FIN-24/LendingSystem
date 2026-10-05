@@ -6,7 +6,6 @@ import { Worker, Viewer } from '@react-pdf-viewer/core';
 import { zoomPlugin, RenderZoomInProps, RenderZoomOutProps } from '@react-pdf-viewer/zoom';
 import '@react-pdf-viewer/core/lib/styles/index.css';
 import '@react-pdf-viewer/default-layout/lib/styles/index.css';
-import packageJson from '../../../package.json';
 import { OrderPopup } from "../cart/OrderPopup";
 import {useGetOrganizationByIdQuery} from '../../hooks/organization-helper';
 import { useNavigate } from "react-router-dom";
@@ -19,7 +18,6 @@ import { User } from "../../models/user.model";
 import { useCreateOrder } from "../../hooks/order-helper";
 import { useGetUserLazy } from "../../hooks/user-helper";
 
-const pdfjsVersion = packageJson.dependencies['pdfjs-dist'];
 
 type AGBPopUpProbs = {
     trigger : boolean,
@@ -144,7 +142,7 @@ export default function AGBPopUp(props : AGBPopUpProbs){
                         ))}*/}
                         { org.agb!="" &&
                           <div>
-                            <Worker workerUrl={`https://unpkg.com/pdfjs-dist@${pdfjsVersion}/build/pdf.worker.min.js`}>
+                            <Worker workerUrl='/pdf.worker.min.js'>
                                 <Viewer fileUrl={process.env.REACT_APP_PDFS_BASE_URL+org.agb}  plugins={[zoomPluginInstance]}/>
                             </Worker>
                             <div style={{ marginTop: '10px' }}>
