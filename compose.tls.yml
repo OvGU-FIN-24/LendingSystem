@@ -1,0 +1,55 @@
+# Optional HTTPS with Let's Encrypt (Caddy on ports 80/443).
+# Enable in .env: COMPOSE_FILE=docker-compose.yml:compose.tls.yml, DOMAIN=..., ACME_EMAIL=...
+# Requires Docker Compose >= 2.23.1. See docs/deploy/operations.md.
+services:
+  frontend:
+    ports: !reset []
+    environment:
+      # Only Caddy can reach the frontend
+      TRUSTED_PROXY_CIDR: 0.0.0.0/0
+
+  caddy:
+    image: caddy:2.11.6-alpine
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      frontend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2019/config/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - public
+
+volumes:
+  caddy-data:
+  caddy-config:
+
+configs:
+  caddyfile:
+    content: |
+      {
+        email ${ACME_EMAIL:?ACME_EMAIL must be set in .env}
+      }
+
+      ${DOMAIN:?DOMAIN must be set in .env} {
+        encode gzip
+        reverse_proxy frontend:8080
+      }
