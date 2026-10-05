@@ -2,13 +2,16 @@ FROM python:3.12.15-slim
 
 WORKDIR /backend
 
+# Unbuffered output so print() logs reach `docker compose logs` immediately
+ENV PYTHONUNBUFFERED=1
+
 # System dependencies for mysqlclient; build tools are removed again in the same layer.
-# gunicorn 20.1.0 imports pkg_resources, which setuptools >= 81 no longer ships.
+# gunicorn 20.1.0 imports pkg_resources, which setuptools >= 81 no longer ships (follow-up: gunicorn >= 23).
 COPY requirements.txt /backend/requirements.txt
 RUN apt-get update \
     && apt-get install -y --no-install-recommends pkg-config default-libmysqlclient-dev build-essential \
     && pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir "setuptools<81" \
+    && pip install --no-cache-dir setuptools==80.9.0 \
     && apt-get purge -y --auto-remove build-essential \
     && rm -rf /var/lib/apt/lists/*
 
