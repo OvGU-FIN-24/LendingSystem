@@ -95,7 +95,7 @@ This applies to deployments started from the old `docker-compose.yml` (MySQL 9.0
 1. **Back up**, with the old stack still running:
 
    ```sh
-   docker compose exec database sh -c 'mysqldump -uroot -p"$(cat /run/secrets/db-password)" --single-transaction --routines --set-gtid-purged=OFF --databases LendingSystem' > backup-$(date +%F).sql
+   docker compose exec -T database sh -c 'mysqldump -uroot -p"$(cat /run/secrets/db-password)" --single-transaction --routines --set-gtid-purged=OFF --databases LendingSystem' > backup-$(date +%F).sql
    P=<project name from step 0>
    for v in image-files pdf-files template-files; do
      docker run --rm -v ${P}_$v:/v:ro -v "$PWD":/b alpine:3.22 tar czf /b/$v.tgz -C /v .
