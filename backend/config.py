@@ -8,7 +8,6 @@ import os
 import socket
 from sqlalchemy import create_engine
 from sqlalchemy.orm import scoped_session, sessionmaker
-import redis
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.executors.pool import ThreadPoolExecutor
@@ -53,6 +52,8 @@ sender_email_password   = os.getenv('sender_email_password')
 
 # Secret key
 secret_key = os.getenv("secret_key")
+if not secret_key:
+    raise SystemExit("secret_key is not set (backend.env): refusing to start")
 
 # Timezone
 timezone_string         = os.getenv('timezone')
@@ -76,21 +77,24 @@ db = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # Create Flask app
 app = Flask(__name__)
-app.debug = True
+app.debug = False
 
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
 app.secret_key = secret_key
 app.config['SESSION_TYPE'] = 'sqlalchemy'
-# app.config['SESSION_PERMANENT'] = False
-# app.config['SESSION_COOKIE_SAMESITE'] = 'None'
-# app.config['SESSION_COOKIE_SECURE'] = False
-# app.config['SESSION_COOKIE_HTTPONLY'] = False
+# Secure cookie by default; set session_cookie_secure=0 only for plain-HTTP tests
+app.config['SESSION_COOKIE_SECURE'] = os.getenv('session_cookie_secure', '1') == '1'
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.permanent_session_lifetime = timedelta(hours=2)
 
 app.config['SQLALCHEMY_DATABASE_URI'] = database_connection_string
 
-CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+# Same origin by default; cors_origins (comma list) enables cross-origin access
+cors_origins = [o.strip() for o in os.getenv('cors_origins', '').split(',') if o.strip()]
+if cors_origins:
+    CORS(app, resources={r"/*": {"origins": cors_origins}}, supports_credentials=True)
 server_session = Session(app)
 
 # Create scheduler for automated mail sending

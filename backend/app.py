@@ -1,3 +1,4 @@
+import os
 import graphene
 from sqlalchemy import inspect
 from flask_graphql import GraphQLView
@@ -66,7 +67,7 @@ app.add_url_rule(
     view_func=UploadView.as_view(
         'graphql',
         schema=schema,
-        graphiql=True
+        graphiql=os.getenv('graphiql', '0') == '1'
     )
 )
 
