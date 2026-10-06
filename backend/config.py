@@ -76,6 +76,11 @@ allowed_email_domains = [
     if d.strip()
 ]
 
+# Login backoff: after login_max_failures failed logins for one email within
+# login_lockout_minutes, further logins for it are refused for that long
+login_max_failures      = int(os.getenv('login_max_failures', '5') or 5)
+login_lockout_minutes   = int(os.getenv('login_lockout_minutes', '15') or 15)
+
 # Secret key
 secret_key = os.getenv("secret_key")
 if not secret_key:

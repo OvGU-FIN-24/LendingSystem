@@ -16,6 +16,7 @@ from string import Template
 from argon2 import PasswordHasher
 from sqlalchemy import func
 
+import login_throttle
 from authz import InvalidInput, bump_auth_epoch
 from config import db, mail_server_address, public_base_url, template_directory
 from models import PasswordResetToken, User
@@ -116,11 +117,12 @@ def request_reset(email):
 
 
 def set_password(user, new_password):
-    """Sets a new password, removes all reset tokens and ends the user's
-    other sessions (commits)."""
+    """Sets a new password, removes all reset tokens, lifts a login lock
+    and ends the user's other sessions (commits)."""
     validate_password(new_password)
     user.password_hash = PasswordHasher().hash(new_password)
     _delete_tokens(user.user_id)
+    login_throttle.clear(user.email)
     bump_auth_epoch(user.user_id)
     db.commit()
 
