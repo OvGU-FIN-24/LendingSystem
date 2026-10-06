@@ -2,14 +2,37 @@ import graphene
 import os
 from typing import Union, List
 
+from authz import viewer, query_viewer, visible_orders_clause, PublicError
 from config import template_directory
-from models import orderStatus
+from models import orderStatus, userRights
 from schema import *
-from sqlalchemy import func
+from sqlalchemy import func, or_
+
+MAX_AVAILABILITY_IDS = 200
+
+
+class BusyRange(graphene.ObjectType):
+    """A booked date range of an object (no order or user data)"""
+    phys_id     = graphene.String(required=True)
+    from_date   = graphene.DateTime(required=True)
+    till_date   = graphene.DateTime(required=True)
+    pending     = graphene.Boolean(required=True)
+
+
+def _parse_order_status(value):
+    try:
+        return orderStatus[value.strip().lower()]
+    except (KeyError, AttributeError):
+        raise PublicError("Ungültiger Status")
+
 
 # Api Queries go here
 class Query(graphene.ObjectType):
-    node = relay.Node.Field()    
+    object_availability = graphene.List(
+        BusyRange,
+        phys_ids            = graphene.Argument(type=graphene.List(graphene.String), required=True),
+        description         = "Returns the booked date ranges of the given physical objects (public)",
+    )
     
     filter_tags = graphene.List(
         #return type
@@ -266,7 +289,11 @@ class Query(graphene.ObjectType):
         users: Union[List[str], None] = None,
         organizations: Union[List[str], None] = None,
     ):
+        v = query_viewer()
         query = Order.get_query(info=info)
+        clause = visible_orders_clause(v)
+        if clause is not None:
+            query = query.filter(clause)
 
         if order_id:
             query = query.filter(OrderModel.order_id == order_id)
@@ -279,7 +306,7 @@ class Query(graphene.ObjectType):
         if return_date:
             query = query.filter(OrderModel.physicalobjects.any(PhysicalObject_OrderModel.return_date <= return_date))
         if creation_date:
-            query = query.filter(OrderModel.creation_time == creation_date)
+            query = query.filter(OrderModel.creation_date == creation_date)
         
         if from_day:
             query = query.filter(func.date(OrderModel.from_date) == from_day)
@@ -288,18 +315,16 @@ class Query(graphene.ObjectType):
             query = query.filter(func.date(OrderModel.till_date) == till_day)
 
         if return_day:
-            query = query.filter(func.date(OrderModel.physicalobjects.any(PhysicalObject_OrderModel.return_date)) == return_day)
+            query = query.filter(OrderModel.physicalobjects.any(func.date(PhysicalObject_OrderModel.return_date) == return_day))
 
         if creation_day:
-            query = query.filter(func.date(OrderModel.creation_time) == creation_day)
+            query = query.filter(func.date(OrderModel.creation_date) == creation_day)
 
         if deposit:
             query = query.filter(OrderModel.deposit == deposit)
         # list params for the relationships .any() returns union (OR Statement)
         if order_status:
-            orderStatus_ = []
-            for os in order_status:
-                orderStatus_.append(orderStatus[os.lower()])
+            orderStatus_ = [_parse_order_status(status) for status in order_status]
             query = query.filter(OrderModel.physicalobjects.any(PhysicalObject_OrderModel.order_status.in_(orderStatus_)))
         if physicalobjects:
             query = query.filter(OrderModel.physicalobjects.any(PhysicalObject_OrderModel.phys_id.in_(physicalobjects)))
@@ -333,7 +358,17 @@ class Query(graphene.ObjectType):
         orders: Union[List[str], None] = None,
         organizations: Union[List[str], None] = None,
     ):
+        v = query_viewer()
         query = User.get_query(info=info)
+        if not v.is_sa:
+            oa_orgs = v.orgs_with(userRights.organization_admin)
+            allowed = [UserModel.user_id == v.user_id]
+            if oa_orgs:
+                allowed.append(UserModel.organizations.any(Organization_UserModel.organization_id.in_(oa_orgs)))
+                if email:
+                    # exact lookup by email for "add member"
+                    allowed.append(func.lower(UserModel.email) == email.strip().lower())
+            query = query.filter(or_(*allowed))
 
         if user_id:
             query = query.filter(UserModel.user_id == user_id)
@@ -342,17 +377,17 @@ class Query(graphene.ObjectType):
         if last_name:
             query = query.filter(UserModel.last_name == last_name)
         if email:
-            query = query.filter(UserModel.email == email)
+            query = query.filter(func.lower(UserModel.email) == email.strip().lower())
         if country:
-            query = query.filter(UserModel.address.country == country)
+            query = query.filter(UserModel.country == country)
         if postcode:
-            query = query.filter(UserModel.address.postcode == postcode)
+            query = query.filter(UserModel.postcode == postcode)
         if city:
-            query = query.filter(UserModel.address.city == city)
+            query = query.filter(UserModel.city == city)
         if street:
-            query = query.filter(UserModel.address.street == street)
+            query = query.filter(UserModel.street == street)
         if house_number:
-            query = query.filter(UserModel.address.house_number == house_number)
+            query = query.filter(UserModel.house_number == house_number)
         if phone_number:
             query = query.filter(UserModel.phone_number == phone_number)
         if matricle_number:
@@ -421,7 +456,7 @@ class Query(graphene.ObjectType):
         # list params for the relationships .any() returns union (OR Statement)
         if agb:
             query = query.filter(OrganizationModel.agb.any(FileModel.file_id.in_(agb)))
-        if users:
+        if users and viewer().is_sa:
             query = query.filter(OrganizationModel.users.any(Organization_UserModel.user_id.in_(users)))
         if physicalobjects:
             query = query.filter(OrganizationModel.physicalobjects.any(PhysicalObjectModel.phys_id.in_(physicalobjects)))
@@ -436,6 +471,7 @@ class Query(graphene.ObjectType):
         # uuid params
         file_id: Union[str, None] = None,
     ):
+        query_viewer()
         query = File.get_query(info=info)
 
         if file_id:
@@ -455,14 +491,18 @@ class Query(graphene.ObjectType):
         return_notes: Union[str, None] = None,
         return_date: Union[str, None] = None,
     ):
+        v = query_viewer()
         query = PhysicalObject_Order.get_query(info=info)
+        clause = visible_orders_clause(v)
+        if clause is not None:
+            query = query.filter(PhysicalObject_OrderModel.order.has(clause))
 
         if order_id:
             query = query.filter(PhysicalObject_OrderModel.order_id == order_id)
         if phys_id:
             query = query.filter(PhysicalObject_OrderModel.phys_id == phys_id)
         if order_status:
-            query = query.filter(PhysicalObject_OrderModel.order_status == orderStatus[order_status.lower()])
+            query = query.filter(PhysicalObject_OrderModel.order_status == _parse_order_status(order_status))
         if return_notes or return_notes == "":
             query = query.filter(PhysicalObject_OrderModel.return_notes.like(f"%{return_notes}%"), PhysicalObject_OrderModel.return_notes != None)
         if return_date:
@@ -470,6 +510,21 @@ class Query(graphene.ObjectType):
         
         physical_object_orders = query.all()
         return physical_object_orders    
+
+    @staticmethod
+    def resolve_object_availability(args, info, phys_ids):
+        ids = [i for i in (phys_ids or []) if i]
+        if len(ids) > MAX_AVAILABILITY_IDS:
+            raise PublicError("Zu viele Objekte angefragt")
+        if not ids:
+            return []
+        rows = (PhysicalObject_OrderModel.query
+                .join(OrderModel, OrderModel.order_id == PhysicalObject_OrderModel.order_id)
+                .filter(PhysicalObject_OrderModel.phys_id.in_(ids),
+                        PhysicalObject_OrderModel.order_status.notin_([orderStatus.rejected, orderStatus.returned]))
+                .all())
+        return [BusyRange(phys_id=row.phys_id, from_date=row.order.from_date, till_date=row.order.till_date,
+                          pending=row.order_status == orderStatus.pending) for row in rows]
 
     @staticmethod
     def resolve_get_imprint(
