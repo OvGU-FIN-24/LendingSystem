@@ -12,7 +12,8 @@ map "$from_trusted_proxy:$http_x_forwarded_proto" $fwd_proto {
     default                 $scheme;
 }
 
-# GraphQL POST bodies: only JSON and multipart (file upload); other types (e.g. HTML form posts) get 415
+# POST bodies to /api/ (GraphQL): only JSON and multipart (file upload); other types (e.g. HTML form posts) get 415.
+# Applied in the /api/ location only.
 map "$request_method:$content_type" $api_bad_content_type {
     "~*^POST:(application/json|multipart/form-data)\s*(;|$)" 0;
     "~^POST:"                                                1;
@@ -27,7 +28,7 @@ map $uri $picture_disposition {
 
 # API requests per client IP (behind a proxy: the client from X-Forwarded-For, see TRUSTED_PROXY_CIDR).
 # Login and password reset share the GraphQL endpoint, so they cannot get a separate, stricter zone here.
-limit_req_zone $binary_remote_addr zone=api:10m rate=5r/s;
+limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
 limit_req_status 429;
 
 server {
@@ -72,7 +73,8 @@ server {
         if ($api_bad_content_type) {
             return 415;
         }
-        limit_req zone=api burst=40 nodelay;
+        # The web app sends many requests at once (e.g. one availability check per item), hence the large burst
+        limit_req zone=api burst=200 nodelay;
         client_max_body_size 100m;
 
         proxy_pass http://backend:5000/;
