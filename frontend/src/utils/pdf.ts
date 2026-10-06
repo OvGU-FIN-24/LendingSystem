@@ -8,5 +8,8 @@ import type { PdfJs } from '@react-pdf-viewer/core';
  * from a crafted PDF font when eval is allowed; isEvalSupported: false turns
  * that code path off.
  */
-export const safePdfParams = (options: PdfJs.GetDocumentParams): PdfJs.GetDocumentParams =>
-  Object.assign({}, options, { isEvalSupported: false });
+export const safePdfParams = (options: PdfJs.GetDocumentParams): PdfJs.GetDocumentParams => {
+  // isEvalSupported is a pdfjs option missing from the viewer's type
+  const params = { ...options, isEvalSupported: false };
+  return params;
+};

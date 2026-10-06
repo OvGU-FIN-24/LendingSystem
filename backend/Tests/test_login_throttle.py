@@ -51,11 +51,14 @@ class LoginThrottleTestCase(unittest.TestCase):
                     password_hash=PasswordHasher().hash(PASSWORD)))
         db.commit()
         self.now = datetime(2030, 1, 1, 12, 0, 0)
-        mock.patch.object(login_throttle, "_utcnow", lambda: self.now).start()
+        mock.patch.object(login_throttle, "_utcnow", self.utcnow).start()
         mock.patch.object(login_throttle, "login_max_failures", 5).start()
         mock.patch.object(login_throttle, "login_lockout_minutes", 15).start()
         self.addCleanup(mock.patch.stopall)
         self.addCleanup(db.remove)
+
+    def utcnow(self):
+        return self.now
 
     def login(self, email=ALICE, password=PASSWORD):
         response = app_module.app.test_client().post(
