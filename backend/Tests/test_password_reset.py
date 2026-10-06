@@ -34,7 +34,7 @@ import manage  # noqa: E402
 import password_reset  # noqa: E402
 import sendMail as send_mail_module  # noqa: E402
 from config import db, engine  # noqa: E402
-from models import Base, PasswordResetToken, User  # noqa: E402
+from models import Base, PasswordResetToken, User, UserAuthEpoch  # noqa: E402
 
 ALICE = "alice@ovgu.de"
 OLD_PASSWORD = "alice-old-password"
@@ -47,7 +47,6 @@ CONFIRM = """mutation($token: String!, $newPassword: String!) {
   confirmPasswordReset(token: $token, newPassword: $newPassword) { ok infoText statusCode } }"""
 LOGIN = """mutation($email: String!, $password: String!) {
   login(email: $email, password: $password) { ok statusCode } }"""
-CHECK_SESSION = "mutation { checkSession { ok } }"
 
 
 class PasswordResetTestCase(unittest.TestCase):
@@ -104,6 +103,12 @@ class PasswordResetTestCase(unittest.TestCase):
         db.expire_all()
         return db.query(User).filter(User.email == ALICE).one()
 
+    def epoch(self):
+        # sessions are checked against this counter (authz.viewer, A20.2)
+        db.expire_all()
+        row = db.get(UserAuthEpoch, self.alice().user_id)
+        return row.epoch if row else 0
+
     def tokens(self):
         db.expire_all()
         return db.query(PasswordResetToken).all()
@@ -148,8 +153,6 @@ class PasswordResetTestCase(unittest.TestCase):
     # A3.3 + R20.2
     def test_confirm_sets_new_password_once_and_ends_sessions(self):
         self.enable_mail()
-        old_session, ok = self.login(OLD_PASSWORD)
-        self.assertTrue(ok)
         self.request_reset()
         token = self.token_from_mail()
 
@@ -157,7 +160,8 @@ class PasswordResetTestCase(unittest.TestCase):
         self.assertTrue(data["ok"], data)
         self.assertTrue(self.login(NEW_PASSWORD)[1])
         self.assertFalse(self.login(OLD_PASSWORD)[1])
-        self.assertFalse(self.gql(old_session, CHECK_SESSION).get_json()["data"]["checkSession"]["ok"])
+        self.assertEqual(self.epoch(), 1)
+        self.assertEqual(self.tokens(), [])
 
         again = self.confirm(token, "another-password-1")
         self.assertEqual((again["ok"], again["statusCode"]), (False, 400))
@@ -254,11 +258,10 @@ class PasswordResetTestCase(unittest.TestCase):
         self.assertEqual(self.tokens(), [])
 
     def test_cli_set_password(self):
-        old_session, _ = self.login(OLD_PASSWORD)
         with mock.patch("getpass.getpass", return_value=NEW_PASSWORD), redirect_stdout(io.StringIO()):
             manage.main(["set-password", ALICE])
         self.assertTrue(self.login(NEW_PASSWORD)[1])
-        self.assertFalse(self.gql(old_session, CHECK_SESSION).get_json()["data"]["checkSession"]["ok"])
+        self.assertEqual(self.epoch(), 1)
 
     def test_cli_set_password_rejects_short_password(self):
         with mock.patch("getpass.getpass", return_value="short"), self.assertRaises(SystemExit):
