@@ -27,30 +27,14 @@ def _email_taken(email, except_user_id=None):
     return query.first() is not None
 
 
-def _set_optional_fields(
-    user,
-    country,
-    city,
-    postcode,
-    street,
-    house_number,
-    phone_number,
-    matricle_number,
-):
-    if country:
-        user.country = country
-    if city:
-        user.city = city
-    if postcode:
-        user.postcode = postcode
-    if street:
-        user.street = street
-    if house_number:
-        user.house_number = house_number
-    if phone_number:
-        user.phone_number = phone_number
-    if matricle_number:
-        user.matricle_number = matricle_number
+OPTIONAL_FIELDS = ("country", "city", "postcode", "street", "house_number",
+                   "phone_number", "matricle_number")
+
+
+def _set_optional_fields(user, fields):
+    for key in OPTIONAL_FIELDS:
+        if fields.get(key):
+            setattr(user, key, fields[key])
 
 
 ##################################
@@ -91,14 +75,9 @@ class create_user(graphene.Mutation):
         last_name,
         first_name,
         password,
-        country=None,
-        city=None,
-        postcode=None,
-        street=None,
-        house_number=None,
-        phone_number=None,
-        matricle_number=None,
+        **optional,
     ):
+        # optional: OPTIONAL_FIELDS (see Arguments)
         email = validate_email(email)
         validate_password(password)
 
@@ -113,16 +92,7 @@ class create_user(graphene.Mutation):
             email=email,
             password_hash=PasswordHasher().hash(password),
         )
-        _set_optional_fields(
-            user,
-            country,
-            city,
-            postcode,
-            street,
-            house_number,
-            phone_number,
-            matricle_number,
-        )
+        _set_optional_fields(user, optional)
 
         db.add(user)
         db.commit()
@@ -174,14 +144,9 @@ class update_user(graphene.Mutation):
         first_name=None,
         password=None,
         current_password=None,
-        country=None,
-        city=None,
-        postcode=None,
-        street=None,
-        house_number=None,
-        phone_number=None,
-        matricle_number=None,
+        **optional,
     ):
+        # optional: OPTIONAL_FIELDS (see Arguments)
         v = require_user()
         if v.user_id != user_id:
             raise Forbidden()
@@ -215,16 +180,7 @@ class update_user(graphene.Mutation):
             user.last_name = last_name
         if first_name:
             user.first_name = first_name
-        _set_optional_fields(
-            user,
-            country,
-            city,
-            postcode,
-            street,
-            house_number,
-            phone_number,
-            matricle_number,
-        )
+        _set_optional_fields(user, optional)
 
         db.commit()
         return update_user(

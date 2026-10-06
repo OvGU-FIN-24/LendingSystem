@@ -36,6 +36,20 @@ def _in_visible_orders(order_ids):
     return PhysicalObjectModel.orders.any(link)
 
 
+def _visible_users_clause(v, email=None):
+    """Users a non-SA viewer may list: self and the members of organisations
+    where the viewer is OA (plus an exact email lookup for "add member")."""
+    allowed = [UserModel.user_id == v.user_id]
+    oa_orgs = v.orgs_with(userRights.organization_admin)
+    if oa_orgs:
+        allowed.append(UserModel.organizations.any(
+            Organization_UserModel.organization_id.in_(oa_orgs)))
+        if email:
+            allowed.append(
+                func.lower(UserModel.email) == email.strip().lower())
+    return or_(*allowed)
+
+
 # Api Queries go here
 class Query(graphene.ObjectType):
     object_availability = graphene.List(
@@ -344,10 +358,9 @@ class Query(graphene.ObjectType):
             query = query.filter(OrderModel.deposit == deposit)
         # list params for the relationships .any() returns union (OR Statement)
         if order_status:
-            orderStatus_ = [
-                _parse_order_status(status) for status in order_status
-            ]
-            query = query.filter(OrderModel.physicalobjects.any(PhysicalObject_OrderModel.order_status.in_(orderStatus_)))
+            statuses = [_parse_order_status(s) for s in order_status]
+            query = query.filter(OrderModel.physicalobjects.any(
+                PhysicalObject_OrderModel.order_status.in_(statuses)))
         if physicalobjects:
             query = query.filter(OrderModel.physicalobjects.any(PhysicalObject_OrderModel.phys_id.in_(physicalobjects)))
         if users:
@@ -383,20 +396,7 @@ class Query(graphene.ObjectType):
         v = query_viewer()
         query = User.get_query(info=info)
         if not v.is_sa:
-            oa_orgs = v.orgs_with(userRights.organization_admin)
-            allowed = [UserModel.user_id == v.user_id]
-            if oa_orgs:
-                allowed.append(
-                    UserModel.organizations.any(
-                        Organization_UserModel.organization_id.in_(oa_orgs)
-                    )
-                )
-                if email:
-                    # exact lookup by email for "add member"
-                    allowed.append(
-                        func.lower(UserModel.email) == email.strip().lower()
-                    )
-            query = query.filter(or_(*allowed))
+            query = query.filter(_visible_users_clause(v, email))
 
         if user_id:
             query = query.filter(UserModel.user_id == user_id)

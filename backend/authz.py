@@ -347,7 +347,7 @@ def check_grant(v, org_id, target_user_id, new_right=None):
     caller_right = v.rights.get(org_id)
     if (
         caller_right is None
-        or not caller_right <= userRights.organization_admin
+        or caller_right > userRights.organization_admin
     ):
         raise Forbidden()
     if new_right is not None and new_right < userRights.organization_admin:
@@ -355,7 +355,7 @@ def check_grant(v, org_id, target_user_id, new_right=None):
     if is_global_sa(target_user_id):
         raise Forbidden()
     membership = db.query(Organization_User).get((org_id, target_user_id))
-    if membership is not None and not membership.rights > caller_right:
+    if membership is not None and membership.rights <= caller_right:
         raise Forbidden()
 
 

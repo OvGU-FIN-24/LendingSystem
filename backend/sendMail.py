@@ -67,7 +67,8 @@ def _deliver(receiver, subject, body):
             pass
 
 
-def sendMail(receiver, subject, body, attempt=0, retry=True):
+# name kept: pickled scheduler jobs reference sendMail.sendMail
+def sendMail(receiver, subject, body, attempt=0, retry=True):  # NOSONAR
     """
     Sends an HTML mail. Returns True when the SMTP server accepted the mail.
 

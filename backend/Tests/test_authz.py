@@ -342,6 +342,48 @@ class A4Orders(SecurityTestCase):
         self.assertEqual(db.query(Order).get(self.ids["order"]).deposit, 30)  # bob's limit, not staff's
 
 
+class MutationFields(SecurityTestCase):
+    """The scalar arguments of create/update mutations reach the database."""
+
+    def test_physical_object_fields(self):
+        client = self.client_for("ia_a")
+        resp = self.gql(client, """mutation($o: String!) {
+          createPhysicalObject(organizationId: $o, invNumInternal: 7, invNumExternal: 8,
+            deposit: 12, storageLocation: "S1", storageLocation2: "S2", name: "New",
+            borrowable: true, description: "D", faults: "F", lendingComment: "L",
+            returnComment: "R") { ok statusCode physicalObject { physId } } }""",
+                        {"o": self.ids["org_a"]})
+        self.assert_ok(resp, "createPhysicalObject")
+        phys_id = resp["data"]["createPhysicalObject"]["physicalObject"]["physId"]
+        obj = db.query(PhysicalObject).get(phys_id)
+        self.assertEqual((obj.inv_num_internal, obj.inv_num_external, obj.deposit, obj.storage_location,
+                          obj.storage_location2, obj.name, obj.borrowable, obj.description, obj.faults,
+                          obj.lending_comment, obj.return_comment, obj.organization_id),
+                         (7, 8, 12, "S1", "S2", "New", True, "D", "F", "L", "R", self.ids["org_a"]))
+        db.remove()
+        resp = self.gql(client, """mutation($p: String!) {
+          updatePhysicalObject(physId: $p, borrowable: false, name: "Renamed", deposit: 3,
+            faults: "") { ok statusCode } }""", {"p": phys_id})
+        self.assert_ok(resp, "updatePhysicalObject")
+        obj = db.query(PhysicalObject).get(phys_id)
+        self.assertEqual((obj.borrowable, obj.name, obj.deposit, obj.faults, obj.storage_location),
+                         (False, "Renamed", 3, "F", "S1"))
+
+    def test_user_optional_fields(self):
+        resp = self.gql(self.client_for(), """mutation {
+          createUser(email: "new.user@ovgu.de", firstName: "N", lastName: "U",
+            password: "long-password-1", city: "Berlin", postcode: 10115) { ok statusCode } }""")
+        self.assert_ok(resp, "createUser")
+        user = db.query(User).filter(User.email == "new.user@ovgu.de").one()
+        self.assertEqual((user.city, user.postcode, user.street), ("Berlin", 10115, None))
+        db.remove()
+        resp = self.gql(self.client_for("bob"), """mutation($u: String!) {
+          updateUser(userId: $u, street: "Main", city: "") { ok statusCode } }""", {"u": self.ids["bob"]})
+        self.assert_ok(resp, "updateUser")
+        user = db.query(User).get(self.ids["bob"])
+        self.assertEqual((user.street, user.city), ("Main", "Magdeburg"))
+
+
 class A10EmailValidation(SecurityTestCase):
 
     def test_a10_1_foreign_domains_rejected(self):

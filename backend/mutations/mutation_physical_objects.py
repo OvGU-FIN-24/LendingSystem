@@ -28,6 +28,14 @@ def _tags(ids):
     )
 
 
+def _update_fields(physical_object, fields):
+    """Sets the given non-empty fields; borrowable may also be set to
+    False."""
+    for key, value in fields.items():
+        if value or (key == "borrowable" and value is not None):
+            setattr(physical_object, key, value)
+
+
 class create_physical_object(graphene.Mutation):
     """
     Creates a new physical object with the given parameters.
@@ -66,24 +74,15 @@ class create_physical_object(graphene.Mutation):
     def mutate(
         root,
         info,
-        inv_num_internal,
-        inv_num_external,
-        borrowable,
-        storage_location,
-        deposit,
-        storage_location2,
-        name,
         organization_id,
         tags=None,
         pictures=None,
         manual=None,
         orders=None,
         groups=None,
-        faults=None,
-        description=None,
-        lending_comment=None,
-        return_comment=None,
+        **fields,
     ):
+        # fields: the scalar arguments of the object (see Arguments)
         require_right(organization_id, userRights.inventory_admin)
         if clean_ids(orders):
             raise InvalidInput(
@@ -94,18 +93,7 @@ class create_physical_object(graphene.Mutation):
         db_groups = require_linkable(GroupModel, groups, organization_id)
 
         physical_object = PhysicalObjectModel(
-            inv_num_internal=inv_num_internal,
-            inv_num_external=inv_num_external,
-            borrowable=borrowable,
-            storage_location=storage_location,
-            storage_location2=storage_location2,
-            name=name,
-            organization_id=organization_id,
-            deposit=deposit,
-            faults=faults,
-            description=description,
-            lending_comment=lending_comment,
-            return_comment=return_comment,
+            organization_id=organization_id, **fields
         )
         if db_pictures:
             physical_object.pictures = db_pictures
@@ -168,22 +156,15 @@ class update_physical_object(graphene.Mutation):
         root,
         info,
         phys_id,
-        inv_num_internal=None,
-        inv_num_external=None,
-        borrowable=None,
-        storage_location=None,
-        storage_location2=None,
-        name=None,
+        organization_id=None,
         pictures=None,
         manual=None,
         tags=None,
         orders=None,
         groups=None,
-        faults=None,
-        description=None,
-        deposit=None,
-        organization_id=None,
+        **fields,
     ):
+        # fields: the scalar arguments of the object (see Arguments)
         org_id = org_of_phys(phys_id)
         require_right(org_id, userRights.inventory_admin)
         physical_object = db.query(PhysicalObjectModel).get(phys_id)
@@ -205,24 +186,7 @@ class update_physical_object(graphene.Mutation):
 
         if target_org != org_id:
             physical_object.organization_id = target_org
-        if inv_num_internal:
-            physical_object.inv_num_internal = inv_num_internal
-        if inv_num_external:
-            physical_object.inv_num_external = inv_num_external
-        if deposit:
-            physical_object.deposit = deposit
-        if borrowable != None:
-            physical_object.borrowable = borrowable
-        if storage_location:
-            physical_object.storage_location = storage_location
-        if storage_location2:
-            physical_object.storage_location2 = storage_location2
-        if faults:
-            physical_object.faults = faults
-        if name:
-            physical_object.name = name
-        if description:
-            physical_object.description = description
+        _update_fields(physical_object, fields)
 
         if db_pictures:
             physical_object.pictures = db_pictures

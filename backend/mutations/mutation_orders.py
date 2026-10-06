@@ -307,7 +307,7 @@ class add_physical_object_to_order(graphene.Mutation):
 
     class Arguments:
         order_id        = graphene.String(required=True)
-        physicalObjects = graphene.List(graphene.String, required=True)
+        physical_objects = graphene.List(graphene.String, required=True)
 
     phys_order  = graphene.List(lambda: PhysicalObject_Order)
     ok          = graphene.Boolean()
@@ -316,11 +316,11 @@ class add_physical_object_to_order(graphene.Mutation):
 
     @staticmethod
     @guarded
-    def mutate(root, info, order_id, physicalObjects):
+    def mutate(root, info, order_id, physical_objects):
         order = _get_order(order_id)
         require_order_edit(order)
 
-        ids = clean_ids(physicalObjects)
+        ids = clean_ids(physical_objects)
         db_physicalobjects = (
             db.query(PhysicalObjectModel)
             .filter(PhysicalObjectModel.phys_id.in_(ids))
@@ -362,7 +362,7 @@ class remove_physical_object_from_order(graphene.Mutation):
 
     class Arguments:
         order_id        = graphene.String(required=True)
-        physicalObjects = graphene.List(graphene.String, required=True)
+        physical_objects = graphene.List(graphene.String, required=True)
 
     phys_order  = graphene.List(lambda: PhysicalObject_Order)
     ok          = graphene.Boolean()
@@ -371,14 +371,14 @@ class remove_physical_object_from_order(graphene.Mutation):
 
     @staticmethod
     @guarded
-    def mutate(root, info, order_id, physicalObjects):
+    def mutate(root, info, order_id, physical_objects):
         order = _get_order(order_id)
         require_order_edit(order)
 
-        ids = set(clean_ids(physicalObjects))
-        for position in list(order.physicalobjects):
-            if position.phys_id in ids:
-                order.physicalobjects.remove(position)
+        ids = set(clean_ids(physical_objects))
+        removed = [p for p in order.physicalobjects if p.phys_id in ids]
+        for position in removed:
+            order.physicalobjects.remove(position)
 
         db.flush()
         _recompute_deposit(order)

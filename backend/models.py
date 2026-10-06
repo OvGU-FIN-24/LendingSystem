@@ -12,6 +12,8 @@ from sqlalchemy.types import TypeDecorator, VARCHAR, INTEGER
 
 # standard, something for querying
 Base = declarative_base()
+
+USER_ID_FK = 'user.user_id'
 Base.query = db.query_property()
 
 class userRights(enum.Enum):
@@ -82,7 +84,7 @@ group_tag = Table (
 user_order = Table (
     'user_order',
     Base.metadata,
-    Column('user_id',           ForeignKey('user.user_id'),                 primary_key=True),
+    Column('user_id', ForeignKey(USER_ID_FK), primary_key=True),
     Column('order_id',          ForeignKey('order.order_id'),               primary_key=True),
     extend_existing = True,
 )
@@ -110,7 +112,7 @@ class Organization_User(Base):
     """
     __tablename__       = "organization_user"
     organization_id     = Column(String(36),        ForeignKey('organization.organization_id'), primary_key=True)
-    user_id             = Column(String(36),        ForeignKey('user.user_id'),                 primary_key=True)
+    user_id = Column(String(36), ForeignKey(USER_ID_FK), primary_key=True)
     rights              = Column(Enum(userRights),  nullable = False, default = userRights.customer)
     # User want to see agb only after a change
     # Should be automatically false if agb changes (irgendwo in Mutations)
@@ -304,7 +306,7 @@ class PasswordResetToken(Base):
     __tablename__       = "password_reset_token"
     token_hash          = Column(String(64),    primary_key = True)
     user_id = Column(
-        String(36), ForeignKey('user.user_id'), nullable=False, index=True
+        String(36), ForeignKey(USER_ID_FK), nullable=False, index=True
     )
     expires_at          = Column(DateTime,      nullable = False)   # naive UTC
 
@@ -316,7 +318,7 @@ class UserAuthEpoch(Base):
     (password change)
     """
     __tablename__       = "user_auth_epoch"
-    user_id = Column(String(36), ForeignKey('user.user_id'), primary_key=True)
+    user_id = Column(String(36), ForeignKey(USER_ID_FK), primary_key=True)
     epoch               = Column(Integer,       nullable = False, default = 0)
 
     user                = relationship("User", back_populates = "auth_epoch")
