@@ -9,6 +9,8 @@ RUN npm ci
 COPY . .
 # No source maps in the production image (they would ship the full source)
 ENV GENERATE_SOURCEMAP=false
+# No inline runtime script in index.html, so the Content-Security-Policy can forbid inline scripts
+ENV INLINE_RUNTIME_CHUNK=false
 # Serve the PDF.js worker from the same origin, matching the installed pdfjs-dist version
 RUN cp node_modules/pdfjs-dist/build/pdf.worker.min.js public/ \
     && npm run build

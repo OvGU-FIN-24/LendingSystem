@@ -51,5 +51,6 @@ configs:
 
       ${DOMAIN:?DOMAIN must be set in .env} {
         encode gzip
+        header Strict-Transport-Security "max-age=31536000"
         reverse_proxy frontend:8080
       }
