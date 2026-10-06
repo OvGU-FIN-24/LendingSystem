@@ -11,11 +11,13 @@ An equipment lending system for organisations at Otto von Guericke University Ma
 - Configurable imprint, privacy policy and mail templates
 - Production-ready Docker Compose deployment, with optional automatic HTTPS (Let's Encrypt)
 
-## Security notice
+## Before going live
 
-Run the LendingSystem only on an internal network or behind a VPN until the known application security issues are resolved. Do not expose it directly to the internet.
+- Rotate all credentials from an earlier setup: administrator password, `secret_key`, SMTP password and database passwords (upgrade step 13 in [docs/deploy/operations.md](docs/deploy/operations.md#upgrading-from-the-previous-compose-file)).
+- Run the stack only behind a TLS-terminating reverse proxy such as Traefik ([Behind Traefik](docs/deploy/operations.md#behind-traefik-recommended-for-production)).
+- Keep the images up to date ([Updating](docs/deploy/operations.md#updating)).
 
-When upgrading an existing installation, change the administrator password, `secret_key`, the SMTP password and the database passwords (upgrade step 13 in [docs/deploy/operations.md](docs/deploy/operations.md)). The stack's security settings (rate limits, headers, container restrictions) are described there under "Security settings".
+The stack's security settings (rate limits, login backoff, headers, container restrictions) are described in [docs/deploy/operations.md](docs/deploy/operations.md#security-settings).
 
 ## Quick start (Docker Compose)
 
