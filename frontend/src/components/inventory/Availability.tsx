@@ -31,7 +31,7 @@ const MAX_UPCOMING_SHOWN = 3;
 export function useAvailability(physIds: string[]): Map<string, BusyRange[]> {
   const client = useApolloClient();
   const [ranges, setRanges] = useState<Map<string, BusyRange[]>>(new Map());
-  const key = Array.from(new Set(physIds)).sort().join(',');
+  const key = Array.from(new Set(physIds)).sort((a, b) => a.localeCompare(b)).join(',');
 
   useEffect(() => {
     const ids = key ? key.split(',') : [];
@@ -75,7 +75,7 @@ const infoStyle: React.CSSProperties = { fontSize: '14px', marginTop: '4px' };
 /**
  * Availability state of one object: "currently lent out until ..." plus the next booked ranges.
  */
-export function AvailabilityInfo({ ranges }: { ranges: BusyRange[] }) {
+export function AvailabilityInfo({ ranges }: Readonly<{ ranges: BusyRange[] }>) {
   const today = startOfToday();
   const loan = currentLoan(ranges);
   const upcoming = ranges
@@ -98,7 +98,9 @@ export function AvailabilityInfo({ ranges }: { ranges: BusyRange[] }) {
 }
 
 /** Availability state of a group: how many of its objects are lent out today. */
-export function GroupAvailabilityInfo({ memberIds, ranges }: { memberIds: string[]; ranges: Map<string, BusyRange[]> }) {
+export function GroupAvailabilityInfo(
+  { memberIds, ranges }: Readonly<{ memberIds: string[]; ranges: Map<string, BusyRange[]> }>,
+) {
   const lentOut = memberIds.filter((id) => currentLoan(ranges.get(id) ?? []) !== undefined).length;
   if (lentOut === 0) {
     return <div style={{ ...infoStyle, color: '#15803d' }} className="availability-info">Derzeit verfügbar</div>;

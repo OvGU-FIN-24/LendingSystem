@@ -45,7 +45,8 @@ export function ResetPassword() {
       } else {
         setErrorMessage(data?.confirmPasswordReset?.infoText || 'Der Link ist ungültig oder abgelaufen.');
       }
-    } catch (error) {
+    } catch {
+      // network or server failure: the details are not useful to the user
       setErrorMessage('Fehler bei der Anfrage. Bitte versuche es später erneut.');
     }
   };
