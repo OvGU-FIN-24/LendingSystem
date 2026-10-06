@@ -1,7 +1,7 @@
 import React, { useState,useEffect } from 'react';
-import { ApolloClient, InMemoryCache, ApolloProvider, useQuery, gql } from '@apollo/client';
+import { useQuery, gql } from '@apollo/client';
 import 'react-day-picker/dist/style.css'
-import { DateRange, DayPicker, Matcher } from 'react-day-picker';
+import { DateRange, DayPicker } from 'react-day-picker';
 import { addDays, format, startOfToday } from 'date-fns';
 
 interface Dates {
@@ -9,8 +9,8 @@ interface Dates {
   tillDate: string;
 }
 
-interface DateArray {
-  filterOrders: Dates[];
+interface AvailabilityResponse {
+  objectAvailability: Dates[];
 }
 
 type CalendarProbs = {
@@ -18,16 +18,18 @@ type CalendarProbs = {
   tillDate : Date | null;
   setStartDate : (date: Date | null) => void;
   setEndDate : (date: Date | null) => void;
+  physicalobjects : string[];
 }
 
+// Public query: busy date ranges of the given objects only
 const GET_DATES = gql(/* GraphQL */ `
-query {
-    filterOrders {
+  query ObjectAvailability($physIds: [String]!) {
+    objectAvailability(physIds: $physIds) {
       fromDate
       tillDate
     }
   }
-`); 
+`);
 
 /**
  * 
@@ -35,7 +37,11 @@ query {
  * @returns calendar where you can set a range of 2 dates that will be needed to know how long the object will be loaned
  */
 export default function Calendar_Querry(probs: CalendarProbs) {
-    const { loading, error, data } = useQuery<DateArray>(GET_DATES); 
+    const { loading, error, data } = useQuery<AvailabilityResponse>(GET_DATES, {
+      variables: { physIds: probs.physicalobjects },
+      skip: probs.physicalobjects.length === 0,
+      fetchPolicy: 'network-only',
+    });
 
     const defaultSelected: DateRange = {
       from: probs.fromDate!,
@@ -95,7 +101,7 @@ export default function Calendar_Querry(probs: CalendarProbs) {
    **/
   const disabledDates = [
     { from: new Date(0), to: addDays(today, -1) },
-    ...(data?.filterOrders.map(order => ({
+    ...(data?.objectAvailability.map(order => ({
       from: new Date(order.fromDate),
       to: new Date(order.tillDate),
     })) || []),
@@ -108,8 +114,7 @@ export default function Calendar_Querry(probs: CalendarProbs) {
    * disables all the dates before the selected date and until the first order is reached in the calendar
    */
   if (range && (range.from !==null)) {
-    console.log(range.from);
-    const closestDate = data?.filterOrders.reduce((closest, current) => {
+    const closestDate = data?.objectAvailability.reduce((closest, current) => {
       const from = new Date(current.fromDate);
       if (from < range.from!) {
         return closest

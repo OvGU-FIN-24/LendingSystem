@@ -4,29 +4,15 @@ import 'react-day-picker/dist/style.css'
 import { DateRange, DayPicker } from 'react-day-picker';
 import { addDays, format, startOfToday } from 'date-fns';
 
-interface Dates {
+interface BusyRange {
+  physId: string;
   fromDate: string;
   tillDate: string;
-  physicalobjects?: {
-    edges: {
-      node: {
-        orderStatus: string;
-        physId: string;
-        physicalobject: {
-          invNumInternal: string;
-          invNumExternal: string;
-          deposit: string;
-          storageLocation: string;
-          name: string;
-          description: string;
-        };
-      };
-    }[];
-  };
+  pending: boolean;
 }
 
-interface DateArray {
-  filterOrders: Dates[];
+interface AvailabilityResponse {
+  objectAvailability: BusyRange[];
 }
 
 type CalendarProbs = {
@@ -37,47 +23,14 @@ type CalendarProbs = {
   physicalobjects : string[];
 }
 
-const GET_DATES = gql(`
-query {
-    filterOrders {
+// Public query: busy date ranges only, no order or user data
+const GET_OBJECT_AVAILABILITY = gql(`
+  query ObjectAvailability($physIds: [String]!) {
+    objectAvailability(physIds: $physIds) {
+      physId
       fromDate
       tillDate
-    }
-  }
-`); 
-
-const GET_DATES_ORDEROBJECT = gql(`
-  query FilterOrdersById($physicalobjects: [String]!) {
-    filterOrders(physicalobjects: $physicalobjects) {
-      orderId
-      fromDate
-      tillDate
-      physicalobjects {
-        edges {
-          node {
-            orderStatus
-            physId
-            physicalobject {
-              invNumInternal
-              invNumExternal
-              deposit
-              storageLocation
-              name
-              description
-            }
-          }
-        }
-      }
-      users {
-        edges {
-          node {
-            email
-            firstName
-            lastName
-            id
-          }
-        }
-      }
+      pending
     }
   }
 `);
@@ -90,15 +43,13 @@ const GET_DATES_ORDEROBJECT = gql(`
  */
 export default function Calendar_Querry(probs: CalendarProbs) {
 
-  var noObjets = false;
-    if (!probs.physicalobjects || probs.physicalobjects.length === 0) {
-      var noObjets = true;
-    }
-    
+    const noObjets = !probs.physicalobjects || probs.physicalobjects.length === 0;
 
-    const { loading, error, data, refetch } = useQuery<DateArray>(GET_DATES_ORDEROBJECT, {
-      variables: {physicalobjects: probs.physicalobjects},
-    }); 
+    const { loading, error, data } = useQuery<AvailabilityResponse>(GET_OBJECT_AVAILABILITY, {
+      variables: {physIds: probs.physicalobjects},
+      skip: noObjets,
+      fetchPolicy: 'network-only',
+    });
 
     const defaultSelected: DateRange = {
       from: probs.fromDate!,
@@ -107,7 +58,6 @@ export default function Calendar_Querry(probs: CalendarProbs) {
 
 
     const [range, setRange] = useState<DateRange | undefined>(defaultSelected);
-    refetch();
 
     useEffect(() => {
       probs.setStartDate(range?.from || null);
@@ -145,19 +95,19 @@ export default function Calendar_Querry(probs: CalendarProbs) {
 
   const today = startOfToday(); 
 
-  const pendingDates = data?.filterOrders
-    .filter(order =>
-      order.physicalobjects!.edges[0]!.node.orderStatus === 'PENDING'
-    )
+  const busyRanges = data?.objectAvailability ?? [];
+
+  const pendingDates = busyRanges
+    .filter(order => order.pending)
     .map(order => ({
       from: new Date(order.fromDate),
       to: new Date(order.tillDate),
-    })) || [];
+    }));
 
 
   const disabledDates = [
     { from: new Date(0), to: addDays(today, -1) },
-    ...(data?.filterOrders
+    ...busyRanges
       .filter(order => {
         const orderFrom = new Date(order.fromDate);
         const orderTill = new Date(order.tillDate);
@@ -179,7 +129,7 @@ export default function Calendar_Querry(probs: CalendarProbs) {
       .map(order => ({
         from: new Date(order.fromDate),
         to: new Date(order.tillDate),
-      })) || []),
+      })),
   ];
 
   const filteredDisabledDates = disabledDates.filter(
@@ -201,7 +151,7 @@ export default function Calendar_Querry(probs: CalendarProbs) {
 
   
   if (range && (range.from !==null)) {
-    const closestDate = data?.filterOrders
+    const closestDate = busyRanges
     .filter(order => {
       const orderFrom = new Date(order.fromDate);
       const orderTill = new Date(order.tillDate);
@@ -228,7 +178,7 @@ export default function Calendar_Querry(probs: CalendarProbs) {
     
     
 
-    if(closestDate!=undefined && closestDate){
+    if (closestDate) {
       additionalDisabledDates = [
         { from: new Date(0), to: addDays(range.from!, -1) },
         { from: addDays(closestDate, 1), to: new Date(8640000000000000) },

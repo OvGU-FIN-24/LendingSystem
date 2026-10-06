@@ -204,7 +204,7 @@ export function Cart() {
                         <h2 //add calendar under here
                         >Objekt bearbeiten
                         </h2>
-                        <Calendar_Querry setEndDate={setEndDate} setStartDate={setStartDate} tillDate={endDate} fromDate={startDate}/>
+                        <Calendar_Querry setEndDate={setEndDate} setStartDate={setStartDate} tillDate={endDate} fromDate={startDate} physicalobjects={selectedProduct ? [selectedProduct.physId] : []}/>
                         
 
                         <div style={inputContainerStyle}>
