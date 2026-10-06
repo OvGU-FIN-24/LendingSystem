@@ -105,6 +105,7 @@ This applies to deployments started from the old `docker-compose.yml` (MySQL 9.0
    for v in image-files pdf-files template-files; do
      docker run --rm -v ${P}_$v:/v:ro -v "$PWD":/b alpine:3.22 tar czf /b/$v.tgz -C /v .
    done
+   chmod 600 backup-*.sql *.tgz
    ```
 
    Check that `backup-*.sql` is not empty and ends with `-- Dump completed`.
@@ -142,7 +143,7 @@ This applies to deployments started from the old `docker-compose.yml` (MySQL 9.0
 8. **Create the backend's DB user.** The image creates it only on an empty data directory, so it must be added once here:
 
    ```sh
-   docker compose exec -T database sh -c 'mysql -uroot -p"$(cat /run/secrets/db-root-password)"' <<SQL
+   docker compose exec -T database sh -c 'MYSQL_PWD="$(cat /run/secrets/db-root-password)" mysql -uroot' <<SQL
    CREATE USER IF NOT EXISTS 'lending'@'%' IDENTIFIED BY '$(cat secrets/db-app-password.txt)';
    GRANT ALL PRIVILEGES ON \`LendingSystem\`.* TO 'lending'@'%';
    SQL
@@ -176,11 +177,16 @@ This applies to deployments started from the old `docker-compose.yml` (MySQL 9.0
 13. **Rotate all credentials (mandatory).** Treat the passwords and keys of the old installation as known to others (for example, the old README suggested a default administrator password) and change all of them now:
 
     - **Administrator (root) password.** The backend never changes an existing administrator from `backend.env`; editing `root_user_password` has no effect on an existing installation. Change the password as described in [Changing the administrator password](#changing-the-administrator-password), then check that the old password no longer works. Do the same for every other account that may still use an old or shared password.
-    - **`secret_key`** in `backend.env`: generate a new one (`python3 -c "import secrets;print(secrets.token_hex(32))"`). All users are logged out.
+    - **`secret_key`** in `backend.env`: generate a new one (`python3 -c "import secrets;print(secrets.token_hex(32))"`).
     - **SMTP password** (`sender_email_password`): change it at the mail provider, then in `backend.env`.
     - **Database passwords:** rotate the MySQL root password that was taken over from `db-password.txt` (see [Rotating the database passwords](#rotating-the-database-passwords)). Do not reuse old database passwords anywhere.
 
-    Then apply the changes: `docker compose up -d --force-recreate backend`.
+    Then apply the changes and log out all users. Sessions are stored in the database, so a new `secret_key` alone does not end them; delete them:
+
+    ```sh
+    docker compose up -d --force-recreate backend
+    docker compose exec -T database sh -c 'MYSQL_PWD="$(cat /run/secrets/db-root-password)" mysql -uroot LendingSystem -e "DELETE FROM sessions"'
+    ```
 
 **Rollback:** `docker compose down`, remove the database volume (`docker volume rm ${P}_database-data`), check out the previous version, put `db-password.txt` back, start the old stack and restore the dump from step 1 ([Restore](#restore)), using secret name `db-password` instead of `db-root-password`.
 
@@ -211,6 +217,7 @@ docker compose exec -T database sh -c 'MYSQL_PWD="$(cat /run/secrets/db-root-pas
 for v in image-files pdf-files template-files; do
   docker run --rm -v ${P}_$v:/v:ro -v "$PWD":/b alpine:3.22 tar czf /b/$v-$(date +%F).tgz -C /v .
 done
+chmod 600 backup-*.sql *.tgz      # the tar archives are written by the container, not under your umask
 ```
 
 With the Let's Encrypt overlay, also back up `caddy-data` the same way (it holds the certificates).
@@ -360,14 +367,14 @@ nginx accepts `X-Forwarded-For` and `X-Forwarded-Proto` only from `TRUSTED_PROXY
 
 The stack applies these limits and headers. Change them in `frontend/nginx/default.conf.template`, `backend/Dockerfile` or `docker-compose.yml` and rebuild.
 
-- **Rate limit:** `/api/` accepts 5 requests per second per client IP, with bursts up to 40; more requests get `429 Too Many Requests`. The client IP comes from the reverse proxy ([Trusted proxy address](#trusted-proxy-address)).
+- **Rate limit:** `/api/` accepts 10 requests per second per client IP on average, with bursts of up to 200 requests (the web app sends one request per item when it checks availability); requests beyond that get `429 Too Many Requests`. The client IP comes from the reverse proxy ([Trusted proxy address](#trusted-proxy-address)), so a wrong `TRUSTED_PROXY_CIDR` makes all users share one limit.
 - **Request types:** `POST /api/…` accepts only `application/json` and `multipart/form-data` (file uploads); other content types get `415`.
-- **Sizes and timeouts:** request bodies up to 100 MB on `/api/` and 1 MB elsewhere. The backend has 30 seconds per request (gunicorn `--timeout 30`, nginx `proxy_read_timeout 30s`).
+- **Sizes and timeouts:** request bodies up to 100 MB on `/api/` and 1 MB elsewhere. nginx waits at most 30 seconds for a backend response (`proxy_read_timeout 30s`) and then returns `504` to the client; the backend may still finish the request in the background. gunicorn's `--timeout 30` only restarts the worker if it stops responding entirely; it does not limit single requests.
 - **Backend workers:** one gunicorn worker with four threads. Do not add workers: the job scheduler (reminder mails) runs in every worker, so more workers would send duplicate mails.
-- **Headers:** `Content-Security-Policy` (scripts only from this site, no framing), `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy` and `X-Content-Type-Options: nosniff`.
+- **Headers:** `Content-Security-Policy` (scripts, styles, pictures and fonts only from this site, no framing; templates such as the imprint therefore cannot load external pictures, fonts or scripts), `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy` and `X-Content-Type-Options: nosniff`.
 - **Uploaded files** (`/pictures/`, `/pdf/`) are served with `Content-Security-Policy: sandbox`, so scripts inside a file do not run on this site when the file is opened directly. SVG pictures open as a download.
 - **HSTS** is not set by nginx, because nginx only speaks plain HTTP. The TLS terminator sets it: the Caddy overlay does this automatically; an upstream reverse proxy should send `Strict-Transport-Security: max-age=31536000` on HTTPS responses.
-- **Containers:** all Linux capabilities are dropped (the database keeps the few its entrypoint needs to switch to the `mysql` user), `no-new-privileges` is set, the root filesystems are read-only (temporary files in `tmpfs`), and memory and process limits apply (database 1 GB, backend 512 MB, frontend 256 MB). Raise `mem_limit` in `docker-compose.yml` if the database is killed for lack of memory (`docker compose ps` shows restarts, `docker inspect --format '{{.State.OOMKilled}}' <container>`).
+- **Containers:** all Linux capabilities are dropped (the database keeps the few its entrypoint needs to switch to the `mysql` user), `no-new-privileges` is set, the root filesystems are read-only (temporary and upload files go to anonymous volumes, the nginx configuration to `tmpfs`), and memory and process limits apply (database 1 GB, backend 512 MB, frontend 256 MB). Raise `mem_limit` in `docker-compose.yml` if the database is killed for lack of memory (`docker compose ps` shows restarts, `docker inspect --format '{{.State.OOMKilled}}' <container>`).
 
 ## Changing the administrator password
 
@@ -440,5 +447,5 @@ The pages read the files on each request; no restart is needed. To take over the
 | Upload fails with 413 | The reverse proxy in front limits body size; allow at least 100 MB. |
 | Requests fail with 429 | Rate limit ([Security settings](#security-settings)). If all users are affected, check `TRUSTED_PROXY_CIDR`: nginx may see every request as coming from the proxy. |
 | API requests fail with 415 | The client sends a `Content-Type` other than `application/json` or `multipart/form-data`. |
-| Backend log `WORKER TIMEOUT` | A request took longer than 30 seconds and was aborted. |
+| Requests fail with 504 | The backend did not answer within 30 seconds (`proxy_read_timeout`). Check `docker compose logs backend`. |
 | Service health | `docker compose ps`, `docker compose logs <service>`. Logs rotate at 3 × 10 MB per container. |
