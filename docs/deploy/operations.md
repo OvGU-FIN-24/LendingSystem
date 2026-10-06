@@ -231,9 +231,83 @@ docker compose up -d
 
 The dump contains `CREATE DATABASE`/`USE`, so it restores into the same schema. Restoring into a fresh installation also works: deploy first (which creates the DB user), then restore.
 
+## Behind Traefik (recommended for production)
+
+Traefik terminates TLS and manages the certificates; the stack serves plain HTTP behind it. Use one of two variants. In both, keep `session_cookie_secure=1` in `backend.env`, and add an HSTS headers middleware to the router (nginx does not send HSTS). Traefik replaces any `X-Forwarded-For`/`X-Forwarded-Proto` sent by clients (unless its entrypoint has `forwardedHeaders.insecure`), so nginx can trust what Traefik sends.
+
+Large uploads: Traefik v3 aborts requests whose body takes longer than 60 seconds to arrive (`respondingTimeouts.readTimeout`). If uploads of big files fail, raise it in Traefik's static configuration, e.g. `entryPoints.websecure.transport.respondingTimeouts.readTimeout: 600s`.
+
+### Variant A: Traefik with the file provider
+
+Traefik runs elsewhere (another host, or on this host outside Docker) and reaches the published port. In `.env`, publish the port only where Traefik can reach it, and trust only Traefik:
+
+```sh
+HTTP_PORT=10.0.0.10:8080          # internal IP of this host; 127.0.0.1:8080 if Traefik runs on this host
+TRUSTED_PROXY_CIDR=10.0.0.5/32    # IP of the Traefik host, as nginx sees it (see Trusted proxy address)
+```
+
+Dynamic configuration for Traefik's file provider (adjust host name, entrypoint and resolver names to your Traefik setup):
+
+```yaml
+http:
+  routers:
+    lendingsystem:
+      rule: Host(`lend.example.org`)
+      entryPoints: [websecure]
+      service: lendingsystem
+      middlewares: [lendingsystem-hsts]
+      tls:
+        certResolver: letsencrypt
+  middlewares:
+    lendingsystem-hsts:
+      headers:
+        stsSeconds: 31536000
+  services:
+    lendingsystem:
+      loadBalancer:
+        servers:
+          - url: http://10.0.0.10:8080   # same address as HTTP_PORT
+```
+
+If Traefik runs on this host with `HTTP_PORT=127.0.0.1:8080`, nginx sees the gateway of the compose network, not `127.0.0.1`; set `TRUSTED_PROXY_CIDR` as described in [Trusted proxy address](#trusted-proxy-address).
+
+### Variant B: Traefik in Docker on the same host
+
+Traefik uses its Docker provider and reaches the frontend over a shared Docker network (here `traefik`, created with `docker network create traefik` and attached to the Traefik container). The frontend port is not published. Create `compose.override.yml` next to `docker-compose.yml` (it is git-ignored and loaded automatically):
+
+```yaml
+services:
+  frontend:
+    ports: !reset []
+    networks: [public, traefik]
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: traefik
+      traefik.http.routers.lendingsystem.rule: Host(`lend.example.org`)
+      traefik.http.routers.lendingsystem.entrypoints: websecure
+      traefik.http.routers.lendingsystem.tls.certresolver: letsencrypt
+      traefik.http.routers.lendingsystem.middlewares: lendingsystem-hsts
+      traefik.http.middlewares.lendingsystem-hsts.headers.stsSeconds: "31536000"
+      traefik.http.services.lendingsystem.loadbalancer.server.port: "8080"
+
+networks:
+  traefik:
+    external: true
+```
+
+Set `TRUSTED_PROXY_CIDR` in `.env` to the subnet of the `traefik` network (only proxies and the services they route to should be attached to it):
+
+```sh
+docker network inspect traefik --format '{{(index .IPAM.Config 0).Subnet}}'
+```
+
+Then run `docker compose up -d`. If you set `COMPOSE_FILE` in `.env`, add `compose.override.yml` to it (`COMPOSE_FILE=docker-compose.yml:compose.override.yml`), because Compose then no longer loads it automatically.
+
+Check (from any client): `curl -sI https://lend.example.org/` shows `strict-transport-security` and `content-security-policy`.
+
 ## HTTPS with Let's Encrypt
 
-Use this when there is no reverse proxy in front of the stack. The overlay `compose.tls.yml` adds Caddy on ports 80 and 443, obtains and renews a Let's Encrypt certificate automatically and redirects HTTP to HTTPS. The frontend port is then no longer published.
+Alternative to Traefik: use this when there is no reverse proxy in front of the stack. The overlay `compose.tls.yml` adds Caddy on ports 80 and 443, obtains and renews a Let's Encrypt certificate automatically and redirects HTTP to HTTPS. The frontend port is then no longer published.
 
 Prerequisites:
 

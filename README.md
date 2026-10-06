@@ -57,7 +57,8 @@ The stack serves plain HTTP and expects a TLS-terminating reverse proxy in front
 - configuration reference (`.env`, `backend.env`, secrets)
 - upgrading from the previous Docker setup
 - updates, backup and restore
-- HTTPS with Let's Encrypt
+- running behind Traefik (recommended for production), see [Behind Traefik](docs/deploy/operations.md#behind-traefik-recommended-for-production)
+- HTTPS with Let's Encrypt (Caddy overlay) as the alternative without a reverse proxy
 - editing templates and troubleshooting
 
 ## Development
