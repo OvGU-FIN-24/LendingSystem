@@ -91,6 +91,7 @@ pip install -r requirements.txt
 ```
 #### Local development
 - Point `backend.env` at a reachable MySQL database (see the keys above).
+- Demo data for a development database: `python manage.py seed-demo --force-dev` (never on production; see `backend/readme.md`).
 
 #### Database evolution
 - Database migration with Alembic

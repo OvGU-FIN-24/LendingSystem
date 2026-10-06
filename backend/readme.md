@@ -164,3 +164,32 @@ logs a warning and sends a built-in German text instead. To use your own text ag
 ```bash
 docker compose cp templates/password_reset_template.html backend:/backend/templates/password_reset_template.html
 ```
+
+# Development: demo data
+
+`manage.py seed-demo` loads Harry Potter themed demo data: the organisations "Hogwarts – Gryffindor",
+"Hogwarts – Slytherin" and "Ministry of Magic" (each with a generated AGB PDF and deposit limits),
+users for every role, items with tags and groups, and orders in different states, so the calendars
+and the catalogue show booked and lent-out items. Dates are relative to the day of seeding.
+
+The command only runs with `testing_on=1` or `--force-dev`, because every demo user has the same
+published password. Never run it against a production database. It is idempotent: a second run
+adds nothing and does not change existing passwords.
+
+```bash
+docker compose exec backend python manage.py seed-demo --force-dev
+```
+
+All demo users have the password `Alohomora-2026`.
+
+| User | Role |
+|---|---|
+| albus.dumbledore@ovgu.de | system admin (root_organization) |
+| minerva.mcgonagall@ovgu.de | organisation admin, Gryffindor |
+| severus.snape@ovgu.de | organisation admin, Slytherin |
+| kingsley.shacklebolt@ovgu.de | organisation admin, Ministry of Magic |
+| argus.filch@ovgu.de | inventory admin, Gryffindor and Slytherin |
+| harry.potter@ovgu.de | member, Gryffindor |
+| hermione.granger@ovgu.de | member, Gryffindor; customer, Slytherin and Ministry |
+| ron.weasley@ovgu.de | customer, Gryffindor |
+| draco.malfoy@ovgu.de | watcher, Gryffindor; member, Slytherin |
