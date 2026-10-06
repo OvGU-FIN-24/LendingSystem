@@ -10,6 +10,7 @@ import { Checkbox, InputGroup, NonIdealState, Overlay2 } from "@blueprintjs/core
 import { BaseInventoryList } from '../internal-inventory/InternalInventory';
 import { useFilterPhysicalObjectsByName } from '../../hooks/pysical-object-helpers';
 import { useUserInfo } from '../../context/LoginStatusContext';
+import { OrganizationRights } from '../../models/user.model';
 import { Worker, Viewer } from '@react-pdf-viewer/core';
 import { zoomPlugin, RenderZoomInProps, RenderZoomOutProps } from '@react-pdf-viewer/zoom';
 import packageJson from '../../../package.json';
@@ -20,15 +21,6 @@ enum OrderStatus {
     PICKED = 'PICKED',
     REJECTED = 'REJECTED',
     RETURNED = 'RETURNED',
-}
-
-enum Rights {
-  SYSTEM_ADMIN = 'SYSTEM_ADMIN',
-  ORGANIZATION_ADMIN = 'ORGANIZATION_ADMIN',
-  INVENTORY_ADMIN = 'INVENTORY_ADMIN',
-  MEMBER = 'MEMBER',
-  CUSTOMER = 'CUSTOMER',
-  WATCHER = 'WATCHER',
 }
 
 const statusTranslations: { [key in OrderStatus]: string } = {
@@ -69,14 +61,6 @@ const EDIT_ORDER = gql`
             firstName
             lastName
             userId
-            organizations {
-              edges {
-                node {
-                  organizationId
-                  rights
-                }
-              }
-            }
           }
         }
       }
@@ -125,14 +109,12 @@ const UPDATE_ORDER_DATE = gql`
 mutation UpdateOrder(
     $orderId: String!,
     $fromDate: Date!,
-    $tillDate: Date!,
-    $deposit: Int!
+    $tillDate: Date!
   ) {
     updateOrder(
       orderId: $orderId,
       fromDate: $fromDate,
       tillDate: $tillDate,
-      deposit: $deposit,
     ) {
       ok
       infoText
@@ -143,7 +125,7 @@ mutation UpdateOrder(
 const UPDATE_ORDER_DEPOSIT = gql`
 mutation UpdateOrder(
     $orderId: String!,
-    $deposit: Int!
+    $deposit: Int
   ) {
     updateOrder(
       orderId: $orderId,
@@ -154,21 +136,6 @@ mutation UpdateOrder(
     }
   }
 `;
-
-const GET_MAX_DEPOSIT = gql`
-    mutation deposit (
-            $organizationId: String,
-            $userRight: String
-        ) {
-        getMaxDeposit (
-            organizationId: $organizationId,
-            userRight: $userRight
-        ) {
-            maxDeposit
-        }
-    }
-`;
-
 
 const REMOVE_PHYSICAL_OBJECT_FROM_ORDER = gql`
 mutation removePhysicalObjectFromOrder(
@@ -258,14 +225,6 @@ interface FilterOrdersData {
                     firstName: string;
                     lastName: string;
                     userId: string;
-                    organizations: {
-                      edges: {
-                        node: {
-                          organizationId: string;
-                          rights: Rights;
-                        }
-                      }[];
-                    };
                 }
             }[];
         };
@@ -307,7 +266,6 @@ function EditRequestScreen({ orderId, isUser }: EditRequestProps) {
     const [UpdateOrderDeposit] = useMutation(UPDATE_ORDER_DEPOSIT);
     const [removePhysicalObjectFromOrder] = useMutation(REMOVE_PHYSICAL_OBJECT_FROM_ORDER);
     const [addPhysicalObjectToOrder] = useMutation(ADD_PHYSICAL_OBJECT_TO_ORDER);
-    const [GetMaxDeposit] = useMutation(GET_MAX_DEPOSIT);
 
     const [updatedDeposit, setUpdatedDeposit] = useState(data.filterOrders[0].deposit);
     const [useCustomDeposit, setUseCustomDeposit] = useState(false);
@@ -338,9 +296,17 @@ function EditRequestScreen({ orderId, isUser }: EditRequestProps) {
 
 
     const {fromDate, tillDate, physicalobjects} = data.filterOrders[0];
-    const organizations = data.filterOrders[0]?.users?.edges[0]?.node?.organizations?.edges || [];
-    const organizationId = data.filterOrders[0]?.organization.organizationId;    
+    const organizationId = data.filterOrders[0]?.organization.organizationId;
+    // Order editing, status changes and the deposit override are staff-only (inventory admin or higher)
+    const viewerRight = UserInfo.organizationInfoList.find((org) => org.id === organizationId)?.rights;
+    const isStaff = viewerRight !== undefined && [
+        OrganizationRights.INVENTORY_ADMIN, OrganizationRights.ORGANIZATION_ADMIN, OrganizationRights.SYSTEM_ADMIN,
+    ].includes(viewerRight);
+    const isStaffView = isStaff && !isUser;
+    // Borrowers may change their own order while it is still pending
+    const isBorrower = data.filterOrders[0].users.edges.some((edge) => edge.node.userId === UserInfo.id);
     const orderStatus = data.filterOrders[0].physicalobjects.edges[0].node.orderStatus;
+    const canEditOrder = isStaffView || (isBorrower && orderStatus === 'PENDING');
     
     var isDepositEditable = false;
 
@@ -376,12 +342,15 @@ function EditRequestScreen({ orderId, isUser }: EditRequestProps) {
         }
         
 
-        if (selectedStatus) {
-          await handleEditRequest();
+        if (isStaffView && isDepositEditable && useCustomDeposit) {
+          await handleOrderDepositChange();
         }
 
-        if (isDepositEditable)
-        handleOrderDepositChange();
+        if (isStaffView && selectedStatus) {
+          await handleEditRequest();
+        } else {
+          navigate('/requests');
+        }
         
       } catch(error) {
         console.error('Error while handling requests:', error);
@@ -409,48 +378,18 @@ function EditRequestScreen({ orderId, isUser }: EditRequestProps) {
 
     };
 
+    // Staff override only; otherwise the server computes the deposit
     const handleOrderDepositChange = async () => {
       try {
-
-        if (!useCustomDeposit){
-
-          const userOrganizations = organizations.filter(
-            (org) => org.node.organizationId === organizationId
-          );
-
-          var maxDeposit = 100000;
-
-          const userInfoResult = userOrganizations.map(async org => {
-            const { data } = await GetMaxDeposit({
-                variables:{
-                    organizationId: org.node.organizationId,
-                    userRight: org.node.rights
-                },
-            });
-            if(data.maxDeposit<maxDeposit) maxDeposit=data.maxDeposit;
-          });
-          await Promise.allSettled(userInfoResult);
-
-          const filteredPhysicalObjects = allPhysicalObjects?.filter((obj) =>
-              selectedObjectIds.includes(obj.id)
-          );
-
-          var depositSum = filteredPhysicalObjects.reduce((sum,obj) => sum + (obj.deposit?? 0), 0);
-
-          if (depositSum > maxDeposit){
-            depositSum = maxDeposit
-          }
-      } else {
-        var depositSum = updatedDeposit;
-      }
-
         const { data } = await UpdateOrderDeposit({
           variables: {
             orderId: orderId,
-            deposit: depositSum 
+            deposit: updatedDeposit
           },
         });
-
+        if (!data?.updateOrder?.ok) {
+          console.log('Deposit update failed:', data?.updateOrder?.infoText);
+        }
         } catch (error) {
           console.error('Error confirming order:', error);
         }
@@ -596,7 +535,7 @@ function EditRequestScreen({ orderId, isUser }: EditRequestProps) {
         <div style={{ padding: "20px" }}>
             <h1>Bestelldetails</h1>
             <h2>Objekte:</h2>
-            {!isUser && (
+            {isStaffView && (
               <div>
                 <select
                     id="order-status"
@@ -655,7 +594,7 @@ function EditRequestScreen({ orderId, isUser }: EditRequestProps) {
             }}>
                 <h3>Kaution Information</h3>
                 <p>Aktuelle Kaution: {(data.filterOrders[0].deposit / 100).toFixed(2) + " €"}</p>
-                {!isUser && isDepositEditable && (
+                {isStaffView && isDepositEditable && (
                 <div>
                   <div>
                   <label style={{ marginRight: '10px' }}>
@@ -682,7 +621,7 @@ function EditRequestScreen({ orderId, isUser }: EditRequestProps) {
                 )}
             </div>
 
-            {!isUser && (
+            {canEditOrder && (
               <div style={{
                       border: "1px solid #ccc",
                       padding: "10px",
@@ -698,7 +637,7 @@ function EditRequestScreen({ orderId, isUser }: EditRequestProps) {
             )}
 
              
-            {!isUser && (
+            {canEditOrder && (
               <div style={{ marginTop: "20px" }}>
                   <button onClick={() => setShowEditPopUp(true)} style={{ marginRight: "10px" }}>Bearbeiten abschließen</button>
                   <button onClick={openHandleChangeDate}>Ausleihzeit ändern</button>

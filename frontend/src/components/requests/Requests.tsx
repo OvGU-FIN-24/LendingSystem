@@ -130,6 +130,8 @@ mutation DeleteOrder(
 `;
 
 
+const STAFF_RIGHTS = ["INVENTORY_ADMIN", "ORGANIZATION_ADMIN", "SYSTEM_ADMIN"];
+
 export function Requests() {
   const UserInfoDispatcher = useUserInfo();
   const OrgList = UserInfoDispatcher.organizationInfoList;
@@ -283,11 +285,12 @@ useEffect(() => {
       (org) => org.id === organizationId
     )
 
-    const userRole = userOrg!.rights;
+    const userRole = userOrg?.rights ?? "CUSTOMER";
 
     const canEditRequests = !["CUSTOMER", "WATCHER"].includes(userRole);
 
-    const showButtons =  userRole !== "CUSTOMER";
+    // Status changes are staff-only (inventory admin or higher in the order's organisation)
+    const showButtons = STAFF_RIGHTS.includes(userRole);
 
 
 
