@@ -1,19 +1,15 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { useLoginStatus } from "../../context/LoginStatusContext";
 import { FaUserEdit, FaTrash } from "react-icons/fa";
 import { Login } from "../login/Login";
 import { gql } from "@apollo/client"; 
 import { OrganizationInfo } from "../../models/user.model";
 import { useLazyQuery } from "@apollo/client";
-import { useMutationWithResponse } from "../../hooks/response-helper";
-import { Organization } from "../../models/organization.model";
 import { useMutation } from "@apollo/client";
 import { startTransition } from "react";
-import {  } from "../../hooks/user-helper";
 import { useGetUserIDbyEmail } from "../../hooks/user-helper";
-import { useGetAddGroupItemByIdQuery } from "../../hooks/group-helpers";
 import { useGetOrganizationByIdQuery } from "../../hooks/organization-helper";
-import { flattenEdges, useMutationWithResponseMapped, useLazyQueryWithResponseMapped, useSuspenseQueryWithResponseMapped } from "../../hooks/response-helper";
+import { useSuspenseQueryWithResponseMapped } from "../../hooks/response-helper";
 
 import "./Profile.css";
 
@@ -110,10 +106,8 @@ export function OrganizationManagement() {
   const [roleEmail, setRoleEmail] = useState("");
   const [orgName, setOrgName] = useState("");
   const [selectedRole, setSelectedRole] = useState("member");
-  const rowsPerPage = 10;
   const highestUserRights = GetHighestUserRights();
   const [errorMessage, setErrorMessage] = useState('');
-  const [email, setEmail] = useState<string | null>(null);
   const [updateUserRights] = useMutation(UPDATE_USER_RIGHTS);
   const [createOrganization] = useMutation(CREATE_ORGANIZATION);
   const [deleteUserFromOrganization] = useMutation(REMOVE_USER_FROM_ORG);
@@ -151,7 +145,7 @@ export function OrganizationManagement() {
           fetchUsers({ variables: { organizationIds: [selectedOrganizationId] } });
         }
       } else {
-        setErrorMessage(data?.createOrganization?.message || 'Organisationserstellung fehlgeschlagen.');
+        setErrorMessage(data?.createOrganization?.infoText || 'Organisationserstellung fehlgeschlagen.');
       }
     } catch (error) {
       setErrorMessage('Fehler bei der Organisationserstellung. Bitte versuche es später erneut.');
@@ -186,7 +180,7 @@ export function OrganizationManagement() {
           fetchUsers({ variables: { organizationIds: [selectedOrganizationId] } });
         }
       } else {
-        setErrorMessage(data?.updateUserRights?.message || 'Rechteänderung fehlgeschlagen.');
+        setErrorMessage(data?.updateUserRights?.infoText || 'Rechteänderung fehlgeschlagen.');
       }
     } catch (error) {
       setErrorMessage('Fehler bei der Rechteänderung. Bitte versuche es später erneut.');
@@ -204,7 +198,7 @@ export function OrganizationManagement() {
         }
       });
 
-      if (data?.updateUserRights?.ok) {
+      if (data?.removeUserFromOrganization?.ok) {
         setErrorMessage('');
         alert('Nutzer erfolgreich entfernt!');
         setUserDeleteOpen(false);
@@ -215,7 +209,7 @@ export function OrganizationManagement() {
           fetchUsers({ variables: { organizationIds: [selectedOrganizationId] } });
         }
       } else {
-        setErrorMessage(data?.deleteUserFromOrganization?.message || 'Entfernen des Nutzers fehlgeschlagen.');
+        setErrorMessage(data?.removeUserFromOrganization?.infoText || 'Entfernen des Nutzers fehlgeschlagen.');
       }
     } catch (error) {
       setErrorMessage('Fehler bei der Anfrage. Bitte versuche es später erneut.');
@@ -232,7 +226,7 @@ export function OrganizationManagement() {
   };
 
 
-const [fetchUsers, { data, loading, error, refetch }] = useLazyQuery(GET_USERS);
+const [fetchUsers, { refetch }] = useLazyQuery(GET_USERS);
 
 
 interface GetOrgByIdResponse {
@@ -271,22 +265,6 @@ interface UserOrg {
 const ORGANIZATIONS2 = loginStatus?.loggedIn ? loginStatus.user?.organizationInfoList : [];
 
 
-const ORGANIZATIONS = [
-  { id: "", name: "System-Admin" },
-  { id: "00000000-0000-0000-0000-000000000003", name: "Stark Industries" },
-  { id: "1376ac52-85f7-4720-9aaa-b8bccd667aeb", name: "X-Men" },
-  { id: "69590f30-0959-406d-a9b5-3fefbda28fb4", name: "fara" },
-  { id: "75c869b4-d191-4b89-91ee-48575e4b48d6", name: "Avengers" },
-  { id: "c9c5feb9-01ff-45de-ba44-c0b38e268170", name: "root_organization" }
-];
-
-const orgname = useGetOrganizationByIdQuery("00000000-0000-0000-0000-000000000003").data.name;
-function Tesorgname (){
-  console.log(useGetOrganizationByIdQuery(orgname));
-}
-
-
-
 function useGetAllUsersInOrganization(orgId: string[]) {
   const mapToGroup = (response: GetOrgByIdResponse[]): UserOrg[] => {
       return response.map(orgRes => ({
@@ -307,17 +285,6 @@ function useGetAllUsersInOrganization(orgId: string[]) {
   );
 };
 
-const handleFetchUsers = () => {
-  fetchUsers({ variables: {} })
-    .then(response => console.log("Fetched Users:", response.data))
-    .catch(error => console.error("Error fetching users:", error));
-};
-
-
-  const userOrganizations = loginStatus.loggedIn
-    ? loginStatus.user?.organizationInfoList || []
-    : [];
-
     const { data: organizationUsers} = useGetAllUsersInOrganization(
       selectedOrganizationId ? [selectedOrganizationId] : []
     );
@@ -325,19 +292,6 @@ const handleFetchUsers = () => {
       user.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       user.lastName.toLowerCase().includes(searchTerm.toLowerCase())
     );
-  const totalRows = filteredUsers.length || rowsPerPage;
-  const totalPages = Math.ceil(totalRows / rowsPerPage);
-
-  const organizationData = useGetAllUsersInOrganization([]);
-  const emailID = useGetUserIDbyEmail("steven.pfeif@ovgu.de");
-  
-  const handleTestClick2 = () => {
-    console.log("Fetched Organization Data:", emailID);
-  };
-
-const handleTestClick = () => {
-  console.log("Fetched Organization Data:", organizationData);
-};
 
 const [selectedUser, setSelectedUser] = useState<UserOrg | null>(null); // New state to track selected user
 
