@@ -323,6 +323,17 @@ class UserAuthEpoch(Base):
 
     user                = relationship("User", back_populates = "auth_epoch")
 
+class LoginThrottle(Base):
+    """
+    Failed logins per submitted email (also unknown ones); only the sha256
+    hash of the normalized email is stored
+    """
+    __tablename__       = "login_throttle"
+    key_hash            = Column(String(64),    primary_key = True)
+    failures            = Column(Integer,       nullable = False, default = 0)
+    window_start        = Column(DateTime,      nullable = True)    # naive UTC
+    locked_until        = Column(DateTime,      nullable = True)    # naive UTC
+
 class Group(Base):
     """
     Group contains physical objects or groups

@@ -12,10 +12,10 @@ import { Console, group } from 'console';
 import { InventoryItem } from '../../models/InventoryItem.model';
 
 import { Worker, Viewer } from '@react-pdf-viewer/core';
+import { safePdfParams } from '../../utils/pdf';
 import { zoomPlugin, RenderZoomInProps, RenderZoomOutProps } from '@react-pdf-viewer/zoom';
 import '@react-pdf-viewer/core/lib/styles/index.css';
 import '@react-pdf-viewer/default-layout/lib/styles/index.css';
-import packageJson from '../../../package.json';
 
 import CalendarQuerryNew from "../../core/input/Buttons/Calendar_Querry_New";
 import { useLoginStatus } from "../../context/LoginStatusContext";
@@ -80,7 +80,6 @@ export function Inventory(): JSX.Element {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const dropdownRef2 = useRef<HTMLDivElement>(null);
 
-  const pdfjsVersion = packageJson.dependencies['pdfjs-dist'];
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -426,7 +425,7 @@ export function Inventory(): JSX.Element {
                     ref={textRef} 
                     style={{ margin: 0, padding: '10px', overflowY: 'auto' }}
                 >
-                  <Viewer fileUrl={process.env.REACT_APP_PDFS_BASE_URL + selectedManualPath}  plugins={[zoomPluginInstance]}/>
+                  <Viewer fileUrl={process.env.REACT_APP_PDFS_BASE_URL + selectedManualPath}  plugins={[zoomPluginInstance]} transformGetDocumentParams={safePdfParams}/>
             </div>
             <div>
               <button

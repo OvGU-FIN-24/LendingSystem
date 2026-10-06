@@ -1,4 +1,3 @@
-import os
 import graphene
 from flask import jsonify
 from graphene_file_upload.flask import FileUploadGraphQLView as UploadView
@@ -12,6 +11,8 @@ from config import (
     engine,
     scheduler,
     testing_on,
+    graphiql,
+    graphql_max_depth,
     application_root_user_name,
     application_root_user_password,
 )
@@ -19,6 +20,7 @@ from schema_queries import Query
 from schema_mutations import Mutations
 from models import Base, userRights
 from authz import AuthzError, PublicError, log
+from graphql_limits import LimitedBackend
 from schema import UserModel, OrganizationModel, Organization_UserModel
 
 # create_all only creates missing tables (checkfirst) and leaves existing ones
@@ -118,7 +120,8 @@ app.add_url_rule(
     view_func=SafeGraphQLView.as_view(
         'graphql',
         schema=schema,
-        graphiql=os.getenv('graphiql', '0') == '1'
+        graphiql=graphiql,
+        backend=LimitedBackend(graphql_max_depth, introspection=graphiql),
     )
 )
 

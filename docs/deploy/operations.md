@@ -2,7 +2,7 @@
 
 This guide covers the production deployment in `docker-compose.yml`: first deployment, upgrading an existing deployment, updates, backup and restore, optional HTTPS with Let's Encrypt, template editing and troubleshooting.
 
-> **Warning: not ready for the public internet yet.** The application has known security issues that are still being fixed. Until they are fixed, run it only on an internal network or behind a VPN, and do not make it reachable from the internet. The hardening in this stack (rate limits, security headers, container restrictions) reduces the risk but does not replace those fixes.
+> **Before going live:** rotate all credentials taken over from an earlier setup ([upgrade step 13](#upgrading-from-the-previous-compose-file), [Rotating the database passwords](#rotating-the-database-passwords)), run the stack only behind a TLS-terminating reverse proxy such as Traefik ([Behind Traefik](#behind-traefik-recommended-for-production)), and keep the images up to date ([Updating](#updating)).
 
 ## Overview
 
@@ -103,9 +103,8 @@ This applies to deployments started from the old `docker-compose.yml` (MySQL 9.0
    docker compose exec -T database sh -c 'MYSQL_PWD="$(cat /run/secrets/db-password)" mysqldump -uroot --single-transaction --routines --set-gtid-purged=OFF --databases LendingSystem' > backup-$(date +%F).sql
    P=<project name from step 0>
    for v in image-files pdf-files template-files; do
-     docker run --rm -v ${P}_$v:/v:ro -v "$PWD":/b alpine:3.22 tar czf /b/$v.tgz -C /v .
+     docker run --rm -v ${P}_$v:/v:ro alpine:3.22 tar czf - -C /v . > $v.tgz
    done
-   chmod 600 backup-*.sql *.tgz
    ```
 
    Check that `backup-*.sql` is not empty and ends with `-- Dump completed`.
@@ -215,9 +214,9 @@ P=lendingsystem
 umask 077
 docker compose exec -T database sh -c 'MYSQL_PWD="$(cat /run/secrets/db-root-password)" mysqldump -uroot --single-transaction --routines --set-gtid-purged=OFF --databases LendingSystem' > backup-$(date +%F).sql
 for v in image-files pdf-files template-files; do
-  docker run --rm -v ${P}_$v:/v:ro -v "$PWD":/b alpine:3.22 tar czf /b/$v-$(date +%F).tgz -C /v .
+  # the archive goes to stdout, so your shell creates the file (owned by you, umask 077)
+  docker run --rm -v ${P}_$v:/v:ro alpine:3.22 tar czf - -C /v . > $v-$(date +%F).tgz
 done
-chmod 600 backup-*.sql *.tgz      # the tar archives are written by the container, not under your umask
 ```
 
 With the Let's Encrypt overlay, also back up `caddy-data` the same way (it holds the certificates).
@@ -370,6 +369,8 @@ The stack applies these limits and headers. Change them in `frontend/nginx/defau
 - **Rate limit:** `/api/` accepts 10 requests per second per client IP on average, with bursts of up to 200 requests (the web app sends one request per item when it checks availability); requests beyond that get `429 Too Many Requests`. The client IP comes from the reverse proxy ([Trusted proxy address](#trusted-proxy-address)), so a wrong `TRUSTED_PROXY_CIDR` makes all users share one limit.
 - **Request types:** `POST /api/…` accepts only `application/json` and `multipart/form-data` (file uploads); other content types get `415`.
 - **Sizes and timeouts:** request bodies up to 100 MB on `/api/` and 1 MB elsewhere. nginx waits at most 30 seconds for a backend response (`proxy_read_timeout 30s`) and then returns `504` to the client; the backend may still finish the request in the background. gunicorn's `--timeout 30` only restarts the worker if it stops responding entirely; it does not limit single requests.
+- **Login backoff:** after 5 failed logins for the same email address within 15 minutes, further logins for that address are refused for 15 minutes, even with the correct password. The answer is the same as for a wrong password. Unknown addresses are counted the same way. A successful login resets the count. Change the limits with `login_max_failures` and `login_lockout_minutes` in `backend.env`. To unlock an account early, set a new password with `docker compose exec backend python manage.py set-password <email>`; a completed password reset also unlocks it.
+- **GraphQL:** schema introspection is off unless `graphiql=1`. Queries nested deeper than `graphql_max_depth` (default 11) and query documents longer than 20 000 characters are rejected.
 - **Backend workers:** one gunicorn worker with four threads. Do not add workers: the job scheduler (reminder mails) runs in every worker, so more workers would send duplicate mails.
 - **Headers:** `Content-Security-Policy` (scripts, styles, pictures and fonts only from this site, no framing; templates such as the imprint therefore cannot load external pictures, fonts or scripts), `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy` and `X-Content-Type-Options: nosniff`.
 - **Uploaded files** (`/pictures/`, `/pdf/`) are served with `Content-Security-Policy: sandbox`, so scripts inside a file do not run on this site when the file is opened directly. SVG pictures open as a download.

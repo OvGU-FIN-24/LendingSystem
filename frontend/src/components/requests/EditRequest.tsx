@@ -12,8 +12,8 @@ import { useFilterPhysicalObjectsByName } from '../../hooks/pysical-object-helpe
 import { useUserInfo } from '../../context/LoginStatusContext';
 import { OrganizationRights } from '../../models/user.model';
 import { Worker, Viewer } from '@react-pdf-viewer/core';
+import { safePdfParams } from '../../utils/pdf';
 import { zoomPlugin, RenderZoomInProps, RenderZoomOutProps } from '@react-pdf-viewer/zoom';
-import packageJson from '../../../package.json';
 
 enum OrderStatus {
     PENDING = 'PENDING',
@@ -252,7 +252,6 @@ function EditRequestScreen({ orderId, isUser }: EditRequestProps) {
 
     const textRef = useRef<HTMLDivElement>(null);
     const zoomPluginInstance = zoomPlugin();
-    const pdfjsVersion = packageJson.dependencies['pdfjs-dist'];
     
       const { ZoomIn, ZoomOut } = zoomPluginInstance;
 
@@ -709,7 +708,7 @@ function EditRequestScreen({ orderId, isUser }: EditRequestProps) {
                                 ref={textRef} 
                                 style={{ margin: 0, padding: '10px', maxHeight: '400px', overflowY: 'auto' }}
                             >
-                                <Viewer fileUrl={process.env.REACT_APP_PDFS_BASE_URL + selectedManualPath}  plugins={[zoomPluginInstance]}/>
+                                <Viewer fileUrl={process.env.REACT_APP_PDFS_BASE_URL + selectedManualPath}  plugins={[zoomPluginInstance]} transformGetDocumentParams={safePdfParams}/>
                         </div>
                         <div>
                           <button

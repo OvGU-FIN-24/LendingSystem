@@ -4,6 +4,7 @@ from flask import current_app, session
 import graphene
 from sqlalchemy import func
 
+import login_throttle
 from authz import guarded, viewer, reset_viewer
 from config import db
 from models import UserAuthEpoch
@@ -30,6 +31,16 @@ class login(graphene.Mutation):
     @staticmethod
     @guarded
     def mutate(root, info, email, password):
+        failed = login(ok=False, info_text=LOGIN_FAILED, status_code=401)
+        if login_throttle.is_locked(email):
+            # same answer and cost as a wrong password; the password is not
+            # checked
+            try:
+                _ph.verify(_DUMMY_HASH, password)
+            except (VerificationError, InvalidHashError):
+                pass
+            return failed
+
         user = UserModel.query.filter(
             func.lower(UserModel.email) == (email or "").strip().lower()
         ).first()
@@ -37,13 +48,17 @@ class login(graphene.Mutation):
         try:
             _ph.verify(user.password_hash if user else _DUMMY_HASH, password)
         except (VerificationError, InvalidHashError):
-            return login(ok=False, info_text=LOGIN_FAILED, status_code=401)
+            login_throttle.record_failure(email)
+            return failed
         if user is None:
-            return login(ok=False, info_text=LOGIN_FAILED, status_code=401)
+            login_throttle.record_failure(email)
+            return failed
+
+        login_throttle.clear(email)
 
         if _ph.check_needs_rehash(user.password_hash):
             user.password_hash = _ph.hash(password)
-            db.commit()
+        db.commit()
 
         epoch_row = db.query(UserAuthEpoch).get(user.user_id)
 
