@@ -160,36 +160,6 @@ class update_user(graphene.Mutation):
             return update_user(ok=False, info_text="Error updating user: " + str(e) + "\n" + str(tb), status_code=500)
 
 
-class reset_password(graphene.Mutation):
-    class Arguments:
-        email = graphene.String(required=True)
-
-    ok          = graphene.Boolean()
-    info_text   = graphene.String()
-    status_code = graphene.Int()
-
-    @staticmethod
-    def mutate(self, info, email):
-        user = db.query(UserModel).filter(UserModel.email == email).first()
-        if not user:
-            return reset_password(ok=False, info_text="User not found", status_code=404)
-        
-        # generate random password
-        new_password = str(uuid.uuid4())
-        ph = PasswordHasher()
-        user.password_hash = ph.hash(new_password)
-        db.commit()
-
-        # read template text
-        with open(os.path.join(template_directory, "password_reset_template.html"), encoding="utf-8") as file:
-            template_password = Template(file.read())
-
-        # send mail
-        sendMail(receiver=email, subject="Ihr Password wurde zurückgesetzt", body=template_password.substitute(password=new_password))
-
-        return reset_password(ok=True, info_text="New password was send by mail", status_code=200)
-
-
 class delete_user(graphene.Mutation):
     """
     Deletes the user with the given user_id.

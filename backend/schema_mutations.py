@@ -9,7 +9,8 @@ from mutation_orders import create_order, update_order, update_order_status, add
 from mutation_organizations import create_organization, update_organization, delete_organization, add_user_to_organization, remove_user_from_organization, get_max_deposit, set_max_deposit, update_user_rights
 from mutation_physical_objects import create_physical_object, update_physical_object, delete_physical_object, is_physical_object_available
 from mutation_tags import create_tag, update_tag, delete_tag
-from mutation_users import create_user, update_user, reset_password, delete_user
+from mutation_users import create_user, update_user, delete_user
+from mutation_password_reset import request_password_reset, confirm_password_reset
 
 
 
@@ -54,4 +55,6 @@ class Mutations(graphene.ObjectType):
     create_user     = create_user.Field()
     update_user     = update_user.Field()
     delete_user     = delete_user.Field()
-    reset_password  = reset_password.Field()
+
+    request_password_reset  = request_password_reset.Field()
+    confirm_password_reset  = confirm_password_reset.Field()

@@ -282,9 +282,33 @@ class User(Base):
 
     organizations       = relationship("Organization_User",                                back_populates = "user", cascade="all, delete-orphan")
     orders              = relationship("Order",             secondary = user_order,        back_populates = "users")
+    reset_tokens        = relationship("PasswordResetToken",                               back_populates = "user", cascade="all, delete-orphan")
+    auth_epoch          = relationship("UserAuthEpoch",     uselist = False,               back_populates = "user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return "User ID: " + str(self.user_id) + "; Name: " + self.first_name + " " + self.last_name
+
+class PasswordResetToken(Base):
+    """
+    Single-use password reset token; only the sha256 hash of the token is stored
+    """
+    __tablename__       = "password_reset_token"
+    token_hash          = Column(String(64),    primary_key = True)
+    user_id             = Column(String(36),    ForeignKey('user.user_id'), nullable = False, index = True)
+    expires_at          = Column(DateTime,      nullable = False)   # naive UTC
+    used_at             = Column(DateTime,      nullable = True)
+
+    user                = relationship("User", back_populates = "reset_tokens")
+
+class UserAuthEpoch(Base):
+    """
+    Per-user counter; sessions carrying an older epoch are invalid (password change)
+    """
+    __tablename__       = "user_auth_epoch"
+    user_id             = Column(String(36),    ForeignKey('user.user_id'), primary_key = True)
+    epoch               = Column(Integer,       nullable = False, default = 0)
+
+    user                = relationship("User", back_populates = "auth_epoch")
 
 class Group(Base):
     """
