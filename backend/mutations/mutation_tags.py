@@ -1,10 +1,21 @@
-from flask import session
 import graphene
-import traceback
 
-from authorization_check import is_authorised, reject_message
-from models import db, userRights
+from authz import guarded, require_user, require_staff_anywhere, require_tag_edit, clean_ids, Forbidden
+from config import db
+from models import userRights
 from schema import GroupModel, PhysicalObjectModel, Tag, TagModel
+
+
+def _linkable_for_tag(v, model, ids):
+    """Every referenced object or group must exist and the caller needs IA+ in its org."""
+    objs = []
+    for ident in clean_ids(ids):
+        obj = db.query(model).get(ident)
+        if obj is None or not v.has(obj.organization_id, userRights.inventory_admin):
+            raise Forbidden()
+        objs.append(obj)
+    return objs
+
 
 ##################################
 # Mutations for Tags             #
@@ -27,39 +38,21 @@ class create_tag(graphene.Mutation):
     status_code = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, name, physicalobjects=None, groups=None):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return create_tag(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-        
-        if not is_authorised(userRights.inventory_admin, session_user_id):
-            return create_tag(ok=False, info_text=reject_message, status_code=403)
+    @guarded
+    def mutate(root, info, name, physicalobjects=None, groups=None):
+        v = require_staff_anywhere()
+        db_physicalobjects = _linkable_for_tag(v, PhysicalObjectModel, physicalobjects)
+        db_groups = _linkable_for_tag(v, GroupModel, groups)
 
+        tag = TagModel(name=name)
+        if db_physicalobjects:
+            tag.physicalobjects = db_physicalobjects
+        if db_groups:
+            tag.groups = db_groups
 
-
-        try:
-            tag = TagModel(name=name)
-
-            if physicalobjects:
-                db_physicalobjects = db.query(PhysicalObjectModel).filter(
-                    PhysicalObjectModel.phys_id.in_(physicalobjects)).all()
-                tag.physicalobjects = db_physicalobjects
-
-            if groups:
-                db_groups = db.query(GroupModel).filter(GroupModel.group_id.in_(groups)).all()
-                tag.groups = db_groups
-
-            db.add(tag)
-
-            db.commit()
-            return create_tag(ok=True, info_text="Tag erfolgreich erstellt.", tag=tag, status_code=200)
-
-        except Exception as e:
-            print(e)
-            tb = traceback.format_exc()
-            return create_tag(ok=False, info_text="Fehler beim Erstellen des Tags. " + str(e) + " traceback:  " + str(tb), status_code=500)
+        db.add(tag)
+        db.commit()
+        return create_tag(ok=True, info_text="Tag erfolgreich erstellt.", tag=tag, status_code=200)
 
 
 class update_tag(graphene.Mutation):
@@ -81,43 +74,22 @@ class update_tag(graphene.Mutation):
     status_code = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, tag_id, name=None, physicalobjects=None, groups=None):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return update_tag(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-        
-        if not is_authorised(userRights.inventory_admin, session_user_id, tag_id=tag_id):
-            return update_tag(ok=False, info_text=reject_message, status_code=403)
+    @guarded
+    def mutate(root, info, tag_id, name=None, physicalobjects=None, groups=None):
+        tag = require_tag_edit(tag_id)
+        v = require_user()
+        db_physicalobjects = _linkable_for_tag(v, PhysicalObjectModel, physicalobjects)
+        db_groups = _linkable_for_tag(v, GroupModel, groups)
 
+        if db_physicalobjects:
+            tag.physicalobjects = db_physicalobjects
+        if db_groups:
+            tag.groups = db_groups
+        if name:
+            tag.name = name
 
-
-        try:
-            tag = TagModel.query.filter(TagModel.tag_id == tag_id).first()
-
-            if not tag:
-                return update_tag(ok=False, info_text="Tag \"" + name + "\" nicht gefunden.", status_code=404)
-            
-            if physicalobjects:
-                db_physicalobjects = db.query(PhysicalObjectModel).filter(
-                    PhysicalObjectModel.phys_id.in_(physicalobjects)).all()
-                tag.physicalobjects = db_physicalobjects
-
-            if groups:
-                db_groups = db.query(GroupModel).filter(GroupModel.group_id.in_(groups)).all()
-                tag.groups = db_groups
-            
-            if name:
-                tag.name = name
-
-            db.commit()
-            return update_tag(ok=True, info_text="Tag erfolgreich aktualisiert.", tag=tag, status_code=200)
-
-        except Exception as e:
-            print(e)
-            tb = traceback.format_exc()
-            return update_tag(ok=False, info_text="Fehler beim Aktualisieren des Tags. " + str(e) + " traceback:  " + str(tb), status_code=500)
+        db.commit()
+        return update_tag(ok=True, info_text="Tag erfolgreich aktualisiert.", tag=tag, status_code=200)
 
 
 class delete_tag(graphene.Mutation):
@@ -133,23 +105,9 @@ class delete_tag(graphene.Mutation):
     status_code = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, tag_id):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return delete_tag(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-        
-        if not is_authorised(userRights.inventory_admin, session_user_id, tag_id=tag_id):
-            return delete_tag(ok=False, info_text=reject_message, status_code=403)
-
-
-
-        tag = TagModel.query.filter(TagModel.tag_id == tag_id).first()
-
-        if tag:
-            db.delete(tag)
-            db.commit()
-            return delete_tag(ok=True, info_text="Tag erfolgreich entfernt.", status_code=200)
-        else:
-            return delete_tag(ok=False, info_text="Tag konnte nicht entfernt werden.", status_code=404)
+    @guarded
+    def mutate(root, info, tag_id):
+        tag = require_tag_edit(tag_id)
+        db.delete(tag)
+        db.commit()
+        return delete_tag(ok=True, info_text="Tag erfolgreich entfernt.", status_code=200)

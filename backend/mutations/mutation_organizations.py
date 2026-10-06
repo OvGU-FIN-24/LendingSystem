@@ -1,12 +1,35 @@
-from flask import session
 import graphene
-import traceback
-import os
 
-from authorization_check import is_authorised, reject_message
-from config import picture_directory, pdf_directory
-from models import db, userRights, File
+from authz import (guarded, require_user, require_sa, require_right, require_files_linkable,
+                   check_grant, parse_right, clean_ids, reset_viewer, ROOT_ORGANIZATION,
+                   Forbidden, NotFound, InvalidInput)
+from config import db
+from models import userRights
 from schema import FileModel, Organization, OrganizationModel, Organization_User, Organization_UserModel, PhysicalObjectModel, UserModel
+
+
+def _get_organization(organization_id):
+    organization = db.query(OrganizationModel).get(organization_id) if organization_id else None
+    if organization is None:
+        raise NotFound("Organisation nicht gefunden.")
+    return organization
+
+
+def _get_user(user_id):
+    user = db.query(UserModel).get(user_id) if user_id else None
+    if user is None:
+        raise NotFound("Benutzer existiert nicht.")
+    return user
+
+
+def _root_users():
+    """Global system admins (system_admin members of root_organization)."""
+    return (db.query(UserModel)
+            .join(Organization_UserModel, Organization_UserModel.user_id == UserModel.user_id)
+            .join(OrganizationModel, OrganizationModel.organization_id == Organization_UserModel.organization_id)
+            .filter(OrganizationModel.name == ROOT_ORGANIZATION,
+                    Organization_UserModel.rights == userRights.system_admin).all())
+
 
 ##################################
 # Mutations for Organizations    #
@@ -33,69 +56,43 @@ class create_organization(graphene.Mutation):
     status_code     = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, name, location, users=None, physicalobjects=None, agb=None):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return create_organization(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-        
-        if not is_authorised(userRights.system_admin, session_user_id):
-            return create_organization(ok=False, info_text=reject_message, status_code=403)
+    @guarded
+    def mutate(root, info, name, location, users=None, physicalobjects=None, agb=None):
+        v = require_sa()
 
+        organization = OrganizationModel(name=name, location=location)
+        db.add(organization)
 
+        if agb:
+            db_agb = db.query(FileModel).get(agb)
+            if db_agb is None:
+                raise NotFound("Datei nicht gefunden.")
+            organization.agb = [db_agb]
+        phys_ids = clean_ids(physicalobjects)
+        if phys_ids:
+            organization.physicalobjects = db.query(PhysicalObjectModel).filter(
+                PhysicalObjectModel.phys_id.in_(phys_ids)).all()
+        db.flush()
 
-        try:
-            organization = OrganizationModel(
-                name=name,
-                location=location,
-            )
-            
-            if agb:
-                db_agb = FileModel.query.filter(FileModel.file_id == agb).first()
-                organization.agb = db_agb
+        # global system admins get system_admin, listed users customer
+        member_ids = set()
+        for root_user in _root_users():
+            db.add(Organization_UserModel(user_id=root_user.user_id, organization_id=organization.organization_id,
+                                          rights=userRights.system_admin))
+            member_ids.add(root_user.user_id)
+        if v.user_id not in member_ids:
+            db.add(Organization_UserModel(user_id=v.user_id, organization_id=organization.organization_id,
+                                          rights=userRights.organization_admin))
+            member_ids.add(v.user_id)
+        for user in db.query(UserModel).filter(UserModel.user_id.in_(clean_ids(users))).all():
+            if user.user_id not in member_ids:
+                db.add(Organization_UserModel(user_id=user.user_id, organization_id=organization.organization_id,
+                                              rights=userRights.customer))
+                member_ids.add(user.user_id)
 
-            if users:
-                db_users = db.query(UserModel).filter(UserModel.user_id.in_(users)).all()
-                organization.users = db_users
-            if physicalobjects:
-                db_physicalobjects = db.query(PhysicalObjectModel).filter(
-                    PhysicalObjectModel.phys_id.in_(physicalobjects)).all()
-                organization.physicalobjects = db_physicalobjects
-            if agb:
-                organization.agb = agb
-
-            db.add(organization)
-            db.commit()
-
-
-            root_user = db.query(UserModel).filter(UserModel.email == "root").first()
-            if root_user.user_id != session_user_id:
-                # add executive User to Organization with highest rights
-                organization_user = Organization_UserModel(
-                    user_id = session_user_id,
-                    organization_id = organization.organization_id,
-                    rights = userRights.organization_admin
-                )
-                db.add(organization_user)
-
-            # add root user to organization
-            organization_user_root = Organization_UserModel(
-                user_id = root_user.user_id,
-                organization_id = organization.organization_id,
-                rights = userRights.system_admin
-            )
-            db.add(organization_user_root)
-
-
-            db.commit()
-            return create_organization(ok=True, info_text="Organisation erfolgreich erstellt.", organization=organization, status_code=200)
-
-        except Exception as e:
-            print(e)
-            tb = traceback.format_exc()
-            return create_organization(ok=False,
-                                       info_text="Fehler beim Erstellen der Organisation. " + str(e) + "\n" + str(tb), status_code=500)
+        db.commit()
+        reset_viewer()
+        return create_organization(ok=True, info_text="Organisation erfolgreich erstellt.", organization=organization, status_code=200)
 
 
 class update_organization(graphene.Mutation):
@@ -120,95 +117,31 @@ class update_organization(graphene.Mutation):
     status_code     = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, organization_id, name=None, location=None, physicalobjects=None, agb=None):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return update_organization(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-        
-        if not is_authorised(userRights.organization_admin, session_user_id, organization_id=organization_id):
-            return update_organization(ok=False, info_text=reject_message, status_code=403)
+    @guarded
+    def mutate(root, info, organization_id=None, name=None, location=None, physicalobjects=None, agb=None):
+        require_right(organization_id, userRights.organization_admin)
+        organization = _get_organization(organization_id)
 
+        phys_ids = clean_ids(physicalobjects)
+        if phys_ids:
+            # moving objects between organisations is reserved to system admins
+            require_sa()
+        db_agb = require_files_linkable([agb], organization_id) if agb else []
 
-        
-        try:
-            organization = OrganizationModel.query.filter(OrganizationModel.organization_id == organization_id).first()
+        if name:
+            organization.name = name
+        if location:
+            organization.location = location
+        if phys_ids:
+            organization.physicalobjects = db.query(PhysicalObjectModel).filter(
+                PhysicalObjectModel.phys_id.in_(phys_ids)).all()
+        if db_agb:
+            # reset user agreement
+            organization.reset_user_agreement()
+            organization.agb = db_agb
 
-            if not organization:
-                return update_organization(ok=False, info_text="Organisation nicht gefunden.", status_code=404)
-            if name:
-                organization.name = name
-            if location:
-                organization.location = location
-            if physicalobjects:
-                db_physicalobjects = db.query(PhysicalObjectModel).filter(
-                    PhysicalObjectModel.phys_id.in_(physicalobjects)).all()
-                organization.physicalobjects = db_physicalobjects
-
-            if agb:
-                db_agb = FileModel.query.filter(FileModel.file_id == agb).first()
-                
-                # reset user agreement
-                organization.reset_user_agreement()
-                
-                organization.agb = [ db_agb ]
-
-            db.commit()
-            return update_organization(ok=True, info_text="Organisation erfolgreich aktualisiert.", organization=organization, status_code=200)
-
-        except Exception as e:
-            print(e)
-            tb = traceback.format_exc()
-            return update_organization(ok=False, info_text="Fehler beim Aktualisieren der Organisation. " + str(e) + "\n" + str(tb), status_code=500)
-
-
-class update_organization_user_status(graphene.Mutation):
-    """
-    Updates the user agreement for the given user in the organization.
-    """
-
-    class Arguments:
-        organization_id     = graphene.String()
-        user_id             = graphene.List(graphene.String)
-        user_agreement      = graphene.Boolean()
-
-    organization_user   = graphene.List(lambda: Organization_User)
-    ok                  = graphene.Boolean()
-    info_text           = graphene.String()
-    status_code         = graphene.Int()
-
-    @staticmethod
-    def mutate(self, info, organization_id, user_id, user_agreement=None):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return update_organization_user_status(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-        
-        if not is_authorised(userRights.customer, session_user_id, organization_id=organization_id):
-            return update_organization_user_status(ok=False, info_text=reject_message, status_code=403)
-
-
-
-        try:
-            organization_user = Organization_UserModel.query.filter(
-                Organization_UserModel.organization_id == organization_id,
-                Organization_UserModel.user_id == user_id).all()
-            if len(organization_user) == 0:
-                return update_organization_user_status(ok=False, info_text="No corresponding User found in Organization.", status_code=404)
-
-            for org_user in organization_user:
-                if user_agreement:
-                    org_user.user_agreement = user_agreement
-
-            db.commit()
-            return update_organization_user_status(ok=True, info_text="User updated.", organization_user=organization_user, status_code=200)
-
-        except Exception as e:
-            print(e)
-            tb = traceback.format_exc()
-            return update_organization_user_status(ok=False, info_text="Error updating user. " + str(e) + "\n" + str(tb), status_code=500)
+        db.commit()
+        return update_organization(ok=True, info_text="Organisation erfolgreich aktualisiert.", organization=organization, status_code=200)
 
 
 class add_user_to_organization(graphene.Mutation):
@@ -227,43 +160,21 @@ class add_user_to_organization(graphene.Mutation):
     status_code         = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, user_id, organization_id, user_right="customer"):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return add_user_to_organization(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-        
-        if not is_authorised(userRights.organization_admin, session_user_id, organization_id=organization_id):
-            return add_user_to_organization(ok=False, info_text=reject_message, status_code=403)
+    @guarded
+    def mutate(root, info, user_id, organization_id, user_right="customer"):
+        v = require_right(organization_id, userRights.organization_admin)
+        right = parse_right(user_right)
+        check_grant(v, organization_id, user_id, right)
+        _get_organization(organization_id)
+        _get_user(user_id)
 
+        if db.query(Organization_UserModel).get((organization_id, user_id)) is not None:
+            raise InvalidInput("Der Benutzer ist bereits Mitglied der Organisation.")
 
-
-        try:
-            user = UserModel.query.filter(UserModel.user_id == user_id).first()
-            organization = OrganizationModel.query.filter(OrganizationModel.organization_id == organization_id).first()
-
-            if not user or not organization:
-                return add_user_to_organization(ok=False, info_text="User oder Organisation existieren nicht.", status_code=404)
-
-            # falls die Rechte die eines organization_admin überschreiten sollten
-            if user_right is userRights.system_admin:
-                return add_user_to_organization(ok=False, info_text="diese Rechte können nicht vergeben werden", status_code=403)
-
-            # create organization_user
-            organization_user = Organization_UserModel(
-                user_id=user_id,
-                organization_id=organization_id,
-                rights=userRights[user_right]
-            )
-
-            db.add(organization_user)
-            db.commit()
-            return add_user_to_organization(ok=True, info_text="User erfolgreich zur Organisation hinzugefügt.", organization_user=organization_user, status_code=200)
-        except Exception as e:
-            print(e)
-            tb = traceback.format_exc()
-            return add_user_to_organization(ok=False, info_text="Etwas hat nicht funktioniert. " + str(e) + "\n" + tb, status_code=500)
+        organization_user = Organization_UserModel(user_id=user_id, organization_id=organization_id, rights=right)
+        db.add(organization_user)
+        db.commit()
+        return add_user_to_organization(ok=True, info_text="User erfolgreich zur Organisation hinzugefügt.", organization_user=[organization_user], status_code=200)
 
 
 class remove_user_from_organization(graphene.Mutation):
@@ -281,38 +192,23 @@ class remove_user_from_organization(graphene.Mutation):
     status_code     = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, user_id, organization_id):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return remove_user_from_organization(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-        
-        if not is_authorised(userRights.organization_admin, session_user_id, organization_id=organization_id):
-            return remove_user_from_organization(ok=False, info_text=reject_message, status_code=403)
-        
+    @guarded
+    def mutate(root, info, user_id, organization_id):
+        v = require_right(organization_id, userRights.organization_admin)
+        check_grant(v, organization_id, user_id)
+        organization = _get_organization(organization_id)
 
-
-        try:
-            user = UserModel.query.filter(UserModel.user_id == user_id).first()
-            organization = OrganizationModel.query.filter(OrganizationModel.organization_id == organization_id).first()
-
-            if not user or not organization:
-                return remove_user_from_organization(ok=False, info_text="User oder Organisation existieren nicht.", status_code=404)
-
-            organization.remove_user(user)
-            db.commit()
-
-            return remove_user_from_organization(ok=True, info_text="User erfolgreich aus der Organisation entfernt.", organization=organization, status_code=200)
-        except Exception as e:
-            print(e)
-            tb = traceback.format_exc()
-            return remove_user_from_organization(ok=False, info_text="Etwas hat nicht funktioniert. " + str(e) + "\n" + tb, status_code=500)
+        membership = db.query(Organization_UserModel).get((organization_id, user_id))
+        if membership is None:
+            raise NotFound("Der Benutzer ist kein Mitglied der Organisation.")
+        db.delete(membership)
+        db.commit()
+        return remove_user_from_organization(ok=True, info_text="User erfolgreich aus der Organisation entfernt.", organization=organization, status_code=200)
 
 
 class update_user_rights(graphene.Mutation):
     """
-    Updates the rights for the given user in the organization.
+    Updates the rights for the given user in the organization (adds the user if not a member).
     """
 
     class Arguments:
@@ -326,37 +222,22 @@ class update_user_rights(graphene.Mutation):
     status_code     = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, user_id, organization_id, new_rights):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return update_user_rights(ok=False, info_text="Keine valide session vorhanden", status_code=419)
+    @guarded
+    def mutate(root, info, user_id, organization_id, new_rights):
+        v = require_right(organization_id, userRights.organization_admin)
+        right = parse_right(new_rights)
+        check_grant(v, organization_id, user_id, right)
+        organization = _get_organization(organization_id)
+        _get_user(user_id)
 
-        if not is_authorised(userRights.organization_admin, session_user_id, organization_id=organization_id):
-            return update_user_rights(ok=False, info_text=reject_message, status_code=403)
-            
+        membership = db.query(Organization_UserModel).get((organization_id, user_id))
+        if membership is None:
+            db.add(Organization_UserModel(user_id=user_id, organization_id=organization_id, rights=right))
+        else:
+            membership.rights = right
 
-
-        try:
-            user = UserModel.query.filter(UserModel.user_id == user_id).first()
-            organization = OrganizationModel.query.filter(OrganizationModel.organization_id == organization_id).first()
-
-            if not user or not organization:
-                return update_user_rights(ok=False, info_text="Benutzer oder Organisation existieren nicht.", status_code=404)
-
-            # add user to organization if not already in it
-            if not organization.has_user(user.user_id):
-                organization.add_user(user, userRights[new_rights])
-            else:
-                organization.set_user_right(user.user_id, userRights[new_rights])
-
-            db.commit()
-            return update_user_rights(ok=True, info_text="Rechte erfolgreich aktualisiert.", organization=organization, status_code=200)
-        except Exception as e:
-            print(e)
-            tb = traceback.format_exc()
-            return update_user_rights(ok=False, info_text="Etwas ist schiefgelaufen. " + str(e), status_code=500)
+        db.commit()
+        return update_user_rights(ok=True, info_text="Rechte erfolgreich aktualisiert.", organization=organization, status_code=200)
 
 
 class get_max_deposit(graphene.Mutation):
@@ -374,24 +255,21 @@ class get_max_deposit(graphene.Mutation):
     status_code = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, organization_id, user_right):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return get_max_deposit(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-        
-        if not is_authorised(userRights.organization_admin, session_user_id, organization_id=organization_id):
-            return get_max_deposit(ok=False, info_text=reject_message, status_code=403)
-        
-        try:
-            max_deposit = OrganizationModel.query.filter(OrganizationModel.organization_id == organization_id).first().get_max_deposit(user_right)
-            return get_max_deposit(ok=True, info_text="Max Deposit erfolgreich abgefragt.", max_deposit=max_deposit, status_code=200)
-        except Exception as e:
-            print(e)
-            tb = traceback.format_exc()
-            return get_max_deposit(ok=False, info_text="Etwas ist schiefgelaufen. " + str(e), status_code=500)
-        
+    @guarded
+    def mutate(root, info, organization_id, user_right):
+        v = require_user()
+        right = parse_right(user_right)
+        organization = db.query(OrganizationModel).get(organization_id) if organization_id else None
+        if organization is None:
+            raise Forbidden()
+        # staff may read every limit; everyone else only the limit for their own right
+        if not v.has(organization_id, userRights.inventory_admin):
+            own_right = v.right_in(organization_id) or userRights.customer
+            if right != own_right:
+                raise Forbidden()
+        return get_max_deposit(ok=True, info_text="Max Deposit erfolgreich abgefragt.",
+                               max_deposit=organization.get_max_deposit(right), status_code=200)
+
 
 class set_max_deposit(graphene.Mutation):
     """
@@ -408,26 +286,18 @@ class set_max_deposit(graphene.Mutation):
     status_code = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, organization_id, user_right, max_deposit):
-        # Check if user is authorised
+    @guarded
+    def mutate(root, info, organization_id, user_right, max_deposit):
+        require_right(organization_id, userRights.organization_admin)
+        right = parse_right(user_right)
+        organization = _get_organization(organization_id)
         try:
-            session_user_id = session['user_id']
-        except:
-            return set_max_deposit(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-        
-        if not is_authorised(userRights.organization_admin, session_user_id, organization_id=organization_id):
-            return set_max_deposit(ok=False, info_text=reject_message, status_code=403)
-        
-        try:
-            organization = OrganizationModel.query.filter(OrganizationModel.organization_id == organization_id).first()
-            organization.set_max_deposit(user_right, max_deposit)
-            
-            db.commit()
-            return set_max_deposit(ok=True, info_text="Max Deposit erfolgreich gesetzt.", status_code=200)
-        except Exception as e:
-            print(e)
-            tb = traceback.format_exc()
-            return set_max_deposit(ok=False, info_text="Etwas ist schiefgelaufen. " + str(e), status_code=500)
+            organization.set_max_deposit(right.name, max_deposit)
+        except KeyError:
+            raise InvalidInput("Ungültiges Recht")
+
+        db.commit()
+        return set_max_deposit(ok=True, info_text="Max Deposit erfolgreich gesetzt.", status_code=200)
 
 
 class delete_organization(graphene.Mutation):
@@ -443,22 +313,16 @@ class delete_organization(graphene.Mutation):
     status_code = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, organization_id):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return delete_organization(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-        
-        if not is_authorised(userRights.system_admin, session_user_id, organization_id=organization_id):
-            return delete_organization(ok=False, info_text=reject_message, status_code=403)
-        
-        organization = OrganizationModel.query.filter(
-            OrganizationModel.organization_id == organization_id).first()
+    @guarded
+    def mutate(root, info, organization_id):
+        require_sa()
+        organization = db.query(OrganizationModel).get(organization_id) if organization_id else None
+        if organization is None:
+            raise NotFound("Organisation konnte nicht entfernt werden.")
+        if organization.name == ROOT_ORGANIZATION:
+            raise Forbidden()
 
-        if organization:
-            db.delete(organization)
-            db.commit()
-            return delete_organization(ok=True, info_text="Organisation erfolgreich entfernt.", status_code=200)
-        else:
-            return delete_organization(ok=False, info_text="Organisation konnte nicht entfernt werden.", status_code=404)
+        db.delete(organization)
+        db.commit()
+        reset_viewer()
+        return delete_organization(ok=True, info_text="Organisation erfolgreich entfernt.", status_code=200)

@@ -1,13 +1,42 @@
 import datetime
-from flask import session
 import graphene
-import traceback
 
-from authorization_check import is_authorised, reject_message
+from authz import (guarded, require_user, require_order_edit, require_order_staff, parse_status,
+                   clean_ids, reset_viewer, log, Forbidden, InvalidInput, NotFound)
 from config import db, timezone
 from models import userRights, orderStatus
 from scheduler import AddJob, CancelJob, status_change
 from schema import Order, OrderModel, OrganizationModel, Organization_UserModel, PhysicalObjectModel, PhysicalObject_Order, PhysicalObject_OrderModel, UserModel
+
+
+def compute_deposit(organization, phys_objects, borrower_id):
+    """Sum of the object deposits, capped by the organisation's limit for the borrower's right."""
+    right = organization.get_user_right(borrower_id) or userRights.customer
+    return min(sum(o.deposit or 0 for o in phys_objects), organization.get_max_deposit(right))
+
+
+def _notify(func, *args):
+    """Reminder and status mails must not fail the order change itself."""
+    try:
+        func(*args)
+    except Exception:
+        log.exception("scheduling order mail failed")
+
+
+def _get_order(order_id):
+    order = db.query(OrderModel).get(order_id) if order_id else None
+    if order is None:
+        # unknown orders are treated like foreign ones
+        require_user()
+        raise Forbidden()
+    return order
+
+
+def _recompute_deposit(order):
+    borrower_id = order.users[0].user_id if order.users else None
+    order.deposit = compute_deposit(order.organization,
+                                    [po.physicalobject for po in order.physicalobjects], borrower_id)
+
 
 ##################################
 # Mutations for orders           #
@@ -33,73 +62,52 @@ class create_order(graphene.Mutation):
     status_code = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, from_date, till_date, physicalobjects, deposit=None):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return create_order(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-        
-        try:
-            physicalobjects = db.query(PhysicalObjectModel).filter(PhysicalObjectModel.phys_id.in_(physicalobjects)).all()
-            if not physicalobjects:
-                return create_order(ok=False, info_text="Physical Objects not found.", status_code=404)
-            
-            # Check if all physical objects are from the same organization
-            organization_id = physicalobjects[0].organization_id
-            organization = db.query(OrganizationModel).filter(OrganizationModel.organization_id == organization_id).first()
-            if len(set([phys_obj.organization_id for phys_obj in physicalobjects])) > 1:
-                return create_order(ok=False, info_text="Alle Objekte müssen der selben Organisation angehören.", status_code=400)
-            
-            # Check if User is part of the organization
-            executive_user = db.query(UserModel).filter(UserModel.user_id == session_user_id).first()
-            is_in_organization = False
-            for organization_user in executive_user.organizations:
-                if organization_user.organization_id == organization_id:
-                    is_in_organization = True
-                    break
-            
+    @guarded
+    def mutate(root, info, from_date, till_date, physicalobjects, deposit=None):
+        v = require_user()
 
-            # add User to organization if not present
-            if not is_in_organization:
-                organization.add_user(executive_user)
-                db.commit()
+        ids = clean_ids(physicalobjects)
+        db_physicalobjects = db.query(PhysicalObjectModel).filter(PhysicalObjectModel.phys_id.in_(ids)).all() if ids else []
+        if not db_physicalobjects or len(db_physicalobjects) != len(set(ids)):
+            raise NotFound("Physical Objects not found.")
 
-            # Create order
-            order = OrderModel(
-                creation_date=datetime.datetime.now(timezone),
-                from_date=from_date,
-                till_date=till_date,
-                users=[executive_user],
-                organization=organization
-            )
+        # Check if all physical objects are from the same organization
+        organization_id = db_physicalobjects[0].organization_id
+        if len({phys_obj.organization_id for phys_obj in db_physicalobjects}) > 1:
+            raise InvalidInput("Alle Objekte müssen der selben Organisation angehören.")
+        organization = db.query(OrganizationModel).get(organization_id)
+        executive_user = db.query(UserModel).get(v.user_id)
 
-            for physicalobject in physicalobjects:
-                order.addPhysicalObject(physicalobject)
+        # any university user may borrow: join the organisation as customer on the first order
+        if v.right_in(organization_id) is None:
+            db.add(Organization_UserModel(organization_id=organization_id, user_id=v.user_id,
+                                          rights=userRights.customer))
+            db.flush()
+            db.refresh(organization)
+            reset_viewer()
 
-            if deposit:
-                order.deposit = deposit
-            else:
-                # if no deposit is given the deposit is the sum of the deposits of the physical objects, clamped by the max deposit for the user
-                if physicalobjects:
-                    phys_deposit = sum([phys.deposit for phys in physicalobjects])
-                    max_deposit = organization.get_max_deposit(organization.get_user_right(session_user_id))
+        order = OrderModel(
+            creation_date=datetime.datetime.now(timezone),
+            from_date=from_date,
+            till_date=till_date,
+            users=[executive_user],
+            organization=organization
+        )
+        for physicalobject in db_physicalobjects:
+            order.addPhysicalObject(physicalobject)
 
-                    order.deposit = min(phys_deposit, max_deposit)
-                else:
-                    order.deposit = 0
+        # the client-supplied deposit is only honoured for staff of the organisation
+        if deposit is not None and v.has(organization_id, userRights.inventory_admin):
+            order.deposit = deposit
+        else:
+            order.deposit = compute_deposit(organization, db_physicalobjects, v.user_id)
 
-            db.add(order)
-            db.commit()
+        db.add(order)
+        db.commit()
 
-            # Add jobs for email reminders for this order
-            AddJob(order.order_id)
-            return create_order(ok=True, info_text="Order erfolgreich erstellt.", order=order, status_code=200)
-
-        except Exception as e:
-            print(e)
-            tb = traceback.format_exc()
-            return create_order(ok=False, info_text="Order konnte nicht erstellt werden. " + str(e) + "\n" + str(tb), status_code=500)
+        # Add jobs for email reminders for this order
+        _notify(AddJob, order.order_id)
+        return create_order(ok=True, info_text="Order erfolgreich erstellt.", order=order, status_code=200)
 
 
 class update_order(graphene.Mutation):
@@ -123,49 +131,38 @@ class update_order(graphene.Mutation):
     status_code = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, order_id, from_date=None, till_date=None, return_date=None, status=None, users=None, deposit=None):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return update_order(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-        
-        if not is_authorised(userRights.customer, session_user_id, order_id=order_id):
-                return update_order(ok=False, info_text=reject_message, status_code=403)
-        
-        # Remove all email reminders for this order
-        CancelJob(order_id)
+    @guarded
+    def mutate(root, info, order_id, from_date=None, till_date=None, users=None, deposit=None):
+        order = _get_order(order_id)
+        require_order_edit(order)
+        user_ids = clean_ids(users)
+        if deposit is not None or user_ids:
+            require_order_staff(order)
 
-        try:            
-            order = OrderModel.query.filter(OrderModel.order_id == order_id).first()
-            # Abort if object does not exist
-            if not order:
-                return update_order(ok=False, info_text="Order nicht gefunden.", status_code=404)
+        db_users = []
+        if user_ids:
+            db_users = db.query(UserModel).filter(UserModel.user_id.in_(user_ids)).all()
+            if len(db_users) != len(set(user_ids)):
+                raise NotFound("Benutzer nicht gefunden.")
 
-            if from_date:
-                order.from_date = from_date
-            if till_date:
-                order.till_date = till_date
-            if users:
-                db_users = db.query(UserModel).filter(UserModel.user_id.in_(users)).all()
-                order.users = db_users
+        # dates arrive as Date; stored as midnight DateTime (same as before on MySQL)
+        if from_date:
+            order.from_date = datetime.datetime.combine(from_date, datetime.time())
+        if till_date:
+            order.till_date = datetime.datetime.combine(till_date, datetime.time())
+        if db_users:
+            order.users = db_users
+        if deposit is not None:
+            order.deposit = deposit
 
-            if deposit:
-                order.deposit = deposit
+        db.commit()
 
-            db.commit()
+        # replace the email reminders for the modified order
+        _notify(CancelJob, order_id)
+        _notify(AddJob, order_id)
+        _notify(status_change, order)
 
-            # add new email reminders for modified job
-            AddJob(order_id)
-            status_change(order)
-
-            return update_order(ok=True, info_text="OrderStatus aktualisiert.", order=order, status_code=200)
-
-        except Exception as e:
-            AddJob(order_id)
-            print(e)
-            tb = traceback.format_exc()
-            return update_order(ok=False, info_text="Fehler beim Aktualisieren der Orders. " + str(e) + " traceback: " + str(tb), status_code=500)
+        return update_order(ok=True, info_text="OrderStatus aktualisiert.", order=order, status_code=200)
 
 
 class update_order_status(graphene.Mutation):
@@ -187,42 +184,29 @@ class update_order_status(graphene.Mutation):
     status_code = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, order_id, physical_objects, return_date=None, status=None, return_notes=None):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return update_order_status(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-        
-        if not is_authorised(userRights.member, session_user_id, order_id=order_id):
-            return update_order_status(ok=False, info_text=reject_message, status_code=403)
+    @guarded
+    def mutate(root, info, order_id, physical_objects, return_date=None, status=None, return_notes=None):
+        order = _get_order(order_id)
+        require_order_staff(order)
+        new_status = parse_status(status) if status else None
 
+        phys_order = db.query(PhysicalObject_OrderModel).filter(
+            PhysicalObject_OrderModel.order_id == order_id,
+            PhysicalObject_OrderModel.phys_id.in_(clean_ids(physical_objects))).all()
+        if len(phys_order) == 0:
+            raise NotFound("Order nicht gefunden.")
 
+        for position in phys_order:
+            if return_date:
+                position.return_date = return_date
+            if new_status:
+                position.order_status = new_status
+            if return_notes:
+                position.return_notes = return_notes
 
-        try:
-            phys_order = PhysicalObject_OrderModel.query.filter(PhysicalObject_OrderModel.order_id == order_id, PhysicalObject_OrderModel.phys_id.in_(physical_objects)).all()
-            # Abort if object does not exist
-            if len(phys_order) == 0:
-                return update_order_status(ok=False, info_text="Order nicht gefunden.", status_code=404)
-
-            for order in phys_order:
-                if return_date:
-                    order.return_date = return_date
-
-                if status:
-                    order.order_status = orderStatus[status]
-                
-                if return_notes:
-                    order.return_notes = return_notes
-
-            db.commit()
-            status_change(phys_order[0].order)
-            return update_order_status(ok=True, info_text="OrderStatus aktualisiert.", phys_order=phys_order, status_code=200)
-
-        except Exception as e:
-            print(e)
-            tb = traceback.format_exc()
-            return update_order_status(ok=False, info_text="Fehler beim Aktualisieren der Order. " + str(e) + " traceback: " + str(tb), status_code=500)
+        db.commit()
+        _notify(status_change, order)
+        return update_order_status(ok=True, info_text="OrderStatus aktualisiert.", phys_order=phys_order, status_code=200)
 
 
 class add_physical_object_to_order(graphene.Mutation):
@@ -241,52 +225,29 @@ class add_physical_object_to_order(graphene.Mutation):
     status_code = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, order_id, physicalObjects):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return add_physical_object_to_order(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-    
-        if not is_authorised(userRights.customer, session_user_id, order_id=order_id):
-            return add_physical_object_to_order(ok=False, info_text=reject_message, status_code=403)
-        
-        
-        
-        try:
-            order = OrderModel.query.filter(OrderModel.order_id == order_id).first()
-            if not order:
-                return add_physical_object_to_order(ok=False, info_text="Order nicht gefunden.", status_code=404)
-            
-            db_physicalobjects = db.query(PhysicalObjectModel).filter(PhysicalObjectModel.phys_id.in_(physicalObjects)).all()
+    @guarded
+    def mutate(root, info, order_id, physicalObjects):
+        order = _get_order(order_id)
+        require_order_edit(order)
 
-            # check if all physical objects are in the same organization
-            organization = order.organization
-            for phys_obj in db_physicalobjects:
-                if phys_obj.organization_id != organization.organization_id:
-                    return add_physical_object_to_order(ok=False, info_text="Physical Objects not in the same organization as the order.", status_code=400)
+        ids = clean_ids(physicalObjects)
+        db_physicalobjects = db.query(PhysicalObjectModel).filter(PhysicalObjectModel.phys_id.in_(ids)).all() if ids else []
+        if not db_physicalobjects or len(db_physicalobjects) != len(set(ids)):
+            raise NotFound("Physical Objects not found.")
+        for phys_obj in db_physicalobjects:
+            if phys_obj.organization_id != order.organization_id:
+                raise InvalidInput("Physical Objects not in the same organization as the order.")
 
+        already = {po.phys_id for po in order.physicalobjects}
+        for phys_obj in db_physicalobjects:
+            if phys_obj.phys_id not in already:
+                order.addPhysicalObject(phys_obj)
 
-            for physObj in db_physicalobjects:
-                order.addPhysicalObject(physObj)
-
-            organization_id = db_physicalobjects[0].organization_id
-            organization = OrganizationModel.query.filter(OrganizationModel.organization_id == organization_id).first()
-            
-            # update the deposit of the order
-            phys_deposit = sum([phys_order.physicalobject.deposit for phys_order in order.physicalobjects])
-            max_deposit = organization.get_max_deposit(organization.get_user_right(session_user_id))
-
-            order.deposit = min(phys_deposit, max_deposit)
-
-            db.commit()
-            status_change(order)
-            return add_physical_object_to_order(ok=True, info_text="Physical Objects added to Order.", phys_order=order.physicalobjects, status_code=200)
-
-        except Exception as e:
-            print(e)
-            tb = traceback.format_exc()
-            return add_physical_object_to_order(ok=False, info_text="Error adding Physical Objects to Order. " + str(e) + "traceback: " + str(tb), status_code=500)
+        db.flush()
+        _recompute_deposit(order)
+        db.commit()
+        _notify(status_change, order)
+        return add_physical_object_to_order(ok=True, info_text="Physical Objects added to Order.", phys_order=order.physicalobjects, status_code=200)
 
 
 class remove_physical_object_from_order(graphene.Mutation):
@@ -305,48 +266,22 @@ class remove_physical_object_from_order(graphene.Mutation):
     status_code = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, order_id, physicalObjects):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return remove_physical_object_from_order(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-        
-        if not is_authorised(userRights.customer, session_user_id, order_id=order_id):
-            return remove_physical_object_from_order(ok=False, info_text=reject_message, status_code=403)
+    @guarded
+    def mutate(root, info, order_id, physicalObjects):
+        order = _get_order(order_id)
+        require_order_edit(order)
 
+        ids = set(clean_ids(physicalObjects))
+        for position in list(order.physicalobjects):
+            if position.phys_id in ids:
+                order.physicalobjects.remove(position)
 
-
-        try:
-            order = OrderModel.query.filter(OrderModel.order_id == order_id).first()
-            if not order:
-                return remove_physical_object_from_order(ok=False, info_text="Order nicht gefunden.", status_code=404)
-
-            db_physicalobjects = db.query(PhysicalObjectModel).filter(
-                PhysicalObjectModel.phys_id.in_(physicalObjects)).all()
-            for physObj in db_physicalobjects:
-                order.removePhysicalObject(physObj)
-
-            executive_user = UserModel.query.filter(UserModel.user_id == session_user_id).first()
-            organization_id = db_physicalobjects[0].organization_id
-            organization = OrganizationModel.query.filter(OrganizationModel.organization_id == organization_id).first()
-            
-            # update the deposit of the order
-            phys_deposit = sum([phys_order.physicalobject.deposit for phys_order in order.physicalobjects])
-            max_deposit = organization.get_max_deposit(organization.get_user_right(session_user_id))
-
-            order.deposit = min(phys_deposit, max_deposit)
-
-            db.commit()
-            status_change(order)
-            return remove_physical_object_from_order(ok=True, info_text="Physical Objects removed from Order.",
-                                                     phys_order=order.physicalobjects, status_code=200)
-
-        except Exception as e:
-            print(e)
-            tb = traceback.format_exc()
-            print(tb)
-            return remove_physical_object_from_order(ok=False, info_text="Error removing Physical Objects from Order. " + str(e) + " traceback: " + str(tb), status_code=500)
+        db.flush()
+        _recompute_deposit(order)
+        db.commit()
+        _notify(status_change, order)
+        return remove_physical_object_from_order(ok=True, info_text="Physical Objects removed from Order.",
+                                                 phys_order=order.physicalobjects, status_code=200)
 
 
 class delete_order(graphene.Mutation):
@@ -362,33 +297,15 @@ class delete_order(graphene.Mutation):
     status_code = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, order_id):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return delete_order(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-        
-        if not is_authorised(userRights.customer, session_user_id, order_id=order_id):
-            return delete_order(ok=False, info_text=reject_message, status_code=403)
+    @guarded
+    def mutate(root, info, order_id):
+        order = _get_order(order_id)
+        require_order_edit(order)
 
+        order.removeAllPhysicalObjects()
+        db.delete(order)
+        db.commit()
 
-
-        order = OrderModel.query.filter(OrderModel.order_id == order_id).first()
-        if order:
-            try:
-                # remove email reminders for deleted order
-                CancelJob(order_id)
-
-                order.removeAllPhysicalObjects()
-                db.delete(order)
-                db.commit()
-                return delete_order(ok=True, info_text="Order erfolgreich entfernt.", status_code=200)
-            except Exception as e:
-                # Re-add the job for email reminders because the deletion failed
-                AddJob(order_id)
-                print(e)
-                tb = traceback.format_exc()
-                return delete_order(ok=False, info_text="Fehler beim Entfernen der Order. " + str(e) + "\n" + str(tb), status_code=500)
-        else:
-            return delete_order(ok=False, info_text="Order konnte nicht entfernt werden. Order ID not found.", status_code=404)
+        # remove email reminders for deleted order
+        _notify(CancelJob, order_id)
+        return delete_order(ok=True, info_text="Order erfolgreich entfernt.", status_code=200)

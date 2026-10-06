@@ -360,3 +360,41 @@ def guarded(mutate):
             log.exception("mutation %s failed ref=%s", info.field_name, ref)
             return payload(ok=False, info_text=f"Interner Fehler (Ref: {ref})", status_code=500)
     return wrapper
+
+
+##################################
+# Visibility (queries and types) #
+##################################
+def order_visible(v, order):
+    """Borrowers see their own orders, staff (IA+) the orders of their organisation, SA all."""
+    if v.user_id is None or order is None:
+        return False
+    if v.has(order.organization_id, userRights.inventory_admin):
+        return True
+    return any(u.user_id == v.user_id for u in order.users)
+
+
+def visible_orders_clause(v):
+    """SQL predicate on Order for the orders visible to v (None for SA = no restriction)."""
+    if v.is_sa:
+        return None
+    from sqlalchemy import or_
+    return or_(Order.users.any(User.user_id == v.user_id),
+               Order.organization_id.in_(v.orgs_with(userRights.inventory_admin)))
+
+
+LEVEL_NONE, LEVEL_CONTACT, LEVEL_FULL = 0, 1, 2
+
+
+def user_level(v, user):
+    """How much of a user record v may see: full (self, SA, OA of a shared org), contact (staff), none."""
+    if v.user_id is None or user is None:
+        return LEVEL_NONE
+    if v.is_sa or v.user_id == user.user_id:
+        return LEVEL_FULL
+    oa_orgs = v.orgs_with(userRights.organization_admin)
+    if oa_orgs and any(m.organization_id in oa_orgs for m in user.organizations):
+        return LEVEL_FULL
+    if v.is_staff_anywhere():
+        return LEVEL_CONTACT
+    return LEVEL_NONE

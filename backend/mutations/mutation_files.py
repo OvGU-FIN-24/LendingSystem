@@ -1,11 +1,10 @@
-from flask import session
 import graphene
 from graphene_file_upload.scalars import Upload
 import os
 import time
-import traceback
 
-from authorization_check import is_authorised, reject_message
+from authz import (guarded, require_right, require_staff_anywhere, require_file_edit,
+                   org_of_phys, org_of_group, InvalidInput, NotFound)
 from config import db, pdf_directory, picture_directory
 from models import userRights
 from schema import File, FileModel, GroupModel, OrganizationModel, PhysicalObjectModel
@@ -32,82 +31,61 @@ class upload_file(graphene.Mutation):
     status_code = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, file, phys_picture_id=None, phys_manual_id=None, organization_id=None, group_id=None, show_index=None):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return upload_file(ok=False, info_text="Keine valide session vorhanden", status_code=419)
+    @guarded
+    def mutate(root, info, file, phys_picture_id=None, phys_manual_id=None, organization_id=None, group_id=None, show_index=None):
+        # authorise against every given target; without a target the file stays
+        # unattached (upload first, attach later), which staff of any organisation may do
+        targets = False
+        for phys_id in (phys_picture_id, phys_manual_id):
+            if phys_id:
+                require_right(org_of_phys(phys_id), userRights.inventory_admin)
+                targets = True
+        if group_id:
+            require_right(org_of_group(group_id), userRights.inventory_admin)
+            targets = True
+        if organization_id:
+            require_right(organization_id, userRights.organization_admin)
+            targets = True
+        if not targets:
+            require_staff_anywhere()
 
-        if not is_authorised(userRights.inventory_admin, session_user_id):
-            return upload_file(ok=False, info_text=reject_message, status_code=403)
+        extension = file.filename.split('.')[-1].lower()
+        if extension in ['jpg', 'jpeg', 'png', 'svg']:
+            file_type = 'picture'
+        elif extension in ['pdf']:
+            file_type = 'pdf'
+        else:
+            raise InvalidInput("File type not supported.")
 
+        file_name = str(time.time()) + "_" + os.path.basename(file.filename).replace(" ", "_")
+        if file_type == 'picture':
+            # Prüfe Dateigröße
+            file.seek(0, os.SEEK_END)
+            file_size = file.tell()
+            file.seek(0)
+            if file_size > (100 * 1024 * 1024): #100MB
+                raise InvalidInput("Die Datei ist zu groß. Maximal erlaubt sind 100 MB.")
+            file.save(os.path.join(picture_directory, file_name))
+        else:
+            file.save(os.path.join(pdf_directory, file_name))
 
+        db_file = FileModel(path=file_name, file_type=file_type)
+        if phys_picture_id:
+            db.query(PhysicalObjectModel).get(phys_picture_id).pictures.append(db_file)
+        if phys_manual_id:
+            db.query(PhysicalObjectModel).get(phys_manual_id).manual.append(db_file)
+        if group_id:
+            db.query(GroupModel).get(group_id).pictures.append(db_file)
+        if organization_id:
+            organization = db.query(OrganizationModel).get(organization_id)
+            organization.reset_user_agreement()
+            organization.agb = [db_file]
+        if show_index:
+            db_file.show_index = show_index
 
-        try:
-            physical_object = None
-            organization = None
-            group = None
-
-            if (phys_picture_id):   physical_object = PhysicalObjectModel.query.filter(
-                PhysicalObjectModel.phys_id == phys_picture_id).first()
-            if (phys_manual_id):    physical_object = PhysicalObjectModel.query.filter(
-                PhysicalObjectModel.phys_id == phys_manual_id).first()
-            organization = OrganizationModel.query.filter(OrganizationModel.organization_id == organization_id).first()
-            group = GroupModel.query.filter(GroupModel.group_id == group_id).first()
-
-            type = None
-            pictureFileExtensions = ['jpg', 'jpeg', 'png', 'svg']
-            pdfFileExtensions = ['pdf']
-            if file.filename.split('.')[-1] in pictureFileExtensions:
-                type = 'picture'
-            elif file.filename.split('.')[-1] in pdfFileExtensions:
-                type = 'pdf'
-
-            if type == None:
-                return upload_file(ok=False, info_text="File type not supported.")
-
-            file_name = file.filename
-            file_name = file_name.replace(" ", "_")
-            time_stamp = str(time.time())
-            file_name = time_stamp + "_" + file_name
-            if type == 'picture':
-                # Prüfe Dateigröße
-                file.seek(0, os.SEEK_END)
-                file_size = file.tell()
-                file.seek(0)
-
-                if file_size > (100 * 1024 * 1024): #100MB
-                    return upload_file(ok=False, info_text="Die Datei ist zu groß. Maximal erlaubt sind 100 MB.")
-                
-                file.save(os.path.join(picture_directory, file_name))
-            elif type == 'pdf':
-                file.save(os.path.join(pdf_directory, file_name))
-
-            file = FileModel(path=file_name,
-                             organization=organization,
-                             group=group,
-                             file_type=type)
-
-            if physical_object and phys_picture_id:
-                physical_object.pictures.append(file)
-            if physical_object and phys_manual_id:
-                physical_object.manual.append(file)
-            if organization:
-                organization.agb = file
-            if group:
-                group.pictures.append(file)
-            if show_index:
-                file.show_index = show_index
-
-            db.add(file)
-            db.commit()
-
-            return upload_file(ok=True, info_text="File uploaded successfully.", file=file, status_code=200)
-        except Exception as e:
-            print(e)
-            tb = traceback.format_exc()
-            return upload_file(ok=False, info_text="Error uploading file. " + str(e) + "\n" + tb, status_code=500)
+        db.add(db_file)
+        db.commit()
+        return upload_file(ok=True, info_text="File uploaded successfully.", file=db_file, status_code=200)
 
 
 class update_file(graphene.Mutation):
@@ -123,36 +101,29 @@ class update_file(graphene.Mutation):
     file        = graphene.Field(lambda: File)
     ok          = graphene.Boolean()
     info_text   = graphene.String()
-    upload_file = graphene.Int()
+    status_code = graphene.Int()
+    upload_file = graphene.Int(description="Deprecated: same value as statusCode")
 
     @staticmethod
-    def mutate(self, info, file_id, show_index=None):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return update_file(ok=False, info_text="Keine valide session vorhanden", upload_file=419)
+    def mutate(root, info, file_id, show_index=None):
+        result = update_file._mutate(root, info, file_id=file_id, show_index=show_index)
+        result.upload_file = result.status_code
+        return result
 
-        if not is_authorised(userRights.inventory_admin, session_user_id):
-            return update_file(ok=False, info_text=reject_message, upload_file=403)
+    @staticmethod
+    @guarded
+    def _mutate(root, info, file_id, show_index=None):
+        db_file = db.query(FileModel).get(file_id)
+        if not db_file:
+            require_staff_anywhere()
+            raise NotFound("File not found.")
+        require_file_edit(db_file)
 
+        if show_index:
+            db_file.show_index = show_index
 
-
-        try:
-            file = FileModel.query.filter(FileModel.file_id == file_id).first()
-
-            if not file:
-                return update_file(ok=False, info_text="File not found.", status_code=404)
-
-            if show_index:
-                file.show_index = show_index
-
-            db.commit()
-            return update_file(ok=True, info_text="File updated successfully.", file=file, status_code=200)
-
-        except Exception as e:
-            print(e)
-            return update_file(ok=False, info_text="Error updating file. " + str(e), status_code=500)
+        db.commit()
+        return update_file(ok=True, info_text="File updated successfully.", file=db_file, status_code=200)
 
 
 class delete_file(graphene.Mutation):
@@ -168,30 +139,19 @@ class delete_file(graphene.Mutation):
     status_code = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, file_id):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return delete_file(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-        
-        if not is_authorised(userRights.inventory_admin, session_user_id):
-            return delete_file(ok=False, info_text=reject_message, status_code=403)
+    @guarded
+    def mutate(root, info, file_id):
+        db_file = db.query(FileModel).get(file_id)
+        if not db_file:
+            require_staff_anywhere()
+            raise NotFound("File not found.")
+        require_file_edit(db_file)
 
+        directory = picture_directory if db_file.file_type == FileModel.FileType.picture else pdf_directory
+        path = os.path.join(directory, os.path.basename(db_file.path))
 
-
-        file = FileModel.query.filter(FileModel.file_id == file_id).first()
-        if file:
-            if file.file_type == File.FileType.picture:
-                path = os.path.join(picture_directory, file.path)
-            else:
-                path = os.path.join(pdf_directory, file.path)
-
-            if os.path.isfile(path):
-                os.remove(path)
-
-            db.delete(file)
-            db.commit()
-            return delete_file(ok=True, info_text="File successfully removed.", status_code=200)
-        else:
-            return delete_file(ok=False, info_text="File not found.", status_code=500)
+        db.delete(db_file)
+        db.commit()
+        if os.path.isfile(path):
+            os.remove(path)
+        return delete_file(ok=True, info_text="File successfully removed.", status_code=200)

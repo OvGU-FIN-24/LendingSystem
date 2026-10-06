@@ -201,7 +201,7 @@ class File(Base):
         other   = 2
 
     __tablename__       = "file"
-    file_id             = Column(String(36),        primary_key = True, default=lambda: uuid.uuid4())
+    file_id             = Column(String(36),        primary_key = True, default=lambda: str(uuid.uuid4()))
     picture_id          = Column(String(36),       ForeignKey('physicalobject.phys_id'),        nullable = True)
     manual_id           = Column(String(36),       ForeignKey('physicalobject.phys_id'),        nullable = True)
     organization_id     = Column(String(36),       ForeignKey('organization.organization_id'),  nullable = True)

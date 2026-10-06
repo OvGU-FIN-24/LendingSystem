@@ -1,16 +1,19 @@
-from flask import session
 import graphene
-import traceback
 
-from authorization_check import is_authorised, reject_message
+from authz import (guarded, require_user, require_right, require_files_linkable, require_linkable,
+                   clean_ids, org_of_phys, InvalidInput, NotFound)
 from config import db
 from models import userRights
-from schema import FileModel, GroupModel, OrderModel, PhysicalObject, PhysicalObjectModel, TagModel
-from sqlalchemy import func
+from schema import GroupModel, PhysicalObject, PhysicalObjectModel, TagModel
 
 ##################################
 # Mutations for Physical Objects #
 ##################################
+
+def _tags(ids):
+    ids = clean_ids(ids)
+    return db.query(TagModel).filter(TagModel.tag_id.in_(ids)).all() if ids else []
+
 
 class create_physical_object(graphene.Mutation):
     """
@@ -46,60 +49,43 @@ class create_physical_object(graphene.Mutation):
     status_code         = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, inv_num_internal, inv_num_external, borrowable, storage_location, deposit, storage_location2, name, organization_id,
-               tags=None, pictures=None, manual=None, orders=None, groups=None, faults=None, description=None):
-        
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return create_physical_object(ok=False, info_text="Keine valide session vorhanden", status_code=419)
+    @guarded
+    def mutate(root, info, inv_num_internal, inv_num_external, borrowable, storage_location, deposit, storage_location2, name, organization_id,
+               tags=None, pictures=None, manual=None, orders=None, groups=None, faults=None, description=None,
+               lending_comment=None, return_comment=None):
+        require_right(organization_id, userRights.inventory_admin)
+        if clean_ids(orders):
+            raise InvalidInput("Neue Objekte können keinen Bestellungen zugeordnet werden.")
+        db_pictures = require_files_linkable(pictures, organization_id)
+        db_manual = require_files_linkable(manual, organization_id)
+        db_groups = require_linkable(GroupModel, groups, organization_id)
 
-        if not is_authorised(userRights.inventory_admin, session_user_id, organization_id=organization_id):
-            return create_physical_object(ok=False, info_text=reject_message, status_code=403)
+        physical_object = PhysicalObjectModel(
+            inv_num_internal=inv_num_internal,
+            inv_num_external=inv_num_external,
+            borrowable=borrowable,
+            storage_location=storage_location,
+            storage_location2=storage_location2,
+            name=name,
+            organization_id=organization_id,
+            deposit=deposit,
+            faults=faults,
+            description=description,
+            lending_comment=lending_comment,
+            return_comment=return_comment,
+        )
+        if db_pictures:
+            physical_object.pictures = db_pictures
+        if db_manual:
+            physical_object.manual = db_manual
+        if db_groups:
+            physical_object.groups = db_groups
+        if clean_ids(tags):
+            physical_object.tags = _tags(tags)
 
-
-
-        try:
-            physical_object = PhysicalObjectModel(
-                inv_num_internal=inv_num_internal,
-                inv_num_external=inv_num_external,
-                borrowable=borrowable,
-                storage_location=storage_location,
-                storage_location2=storage_location2,
-                name=name,
-                organization_id=organization_id,
-                deposit = deposit
-            )
-            
-            if pictures:
-                db_pictures = db.query(FileModel).filter(FileModel.file_id.in_(pictures)).all()
-                physical_object.pictures = db_pictures
-            if manual:
-                db_manual = db.query(FileModel).filter(FileModel.file_id.in_(manual)).all()
-                physical_object.manual = db_manual
-            if orders:
-                db_orders = db.query(OrderModel).filter(OrderModel.order_id.in_(orders)).all()
-                physical_object.orders = db_orders
-            if groups:
-                db_groups = db.query(GroupModel).filter(GroupModel.group_id.in_(groups)).all()
-                physical_object.groups = db_groups
-            if faults:
-                physical_object.faults = faults
-            if description:
-                physical_object.description = description
-            if tags:
-                db_tags = db.query(TagModel).filter(TagModel.tag_id.in_(tags)).all()
-                physical_object.tags = db_tags
-
-            db.add(physical_object)
-            db.commit()
-            return create_physical_object(ok=True, info_text="Objekt erfolgreich erstellt.", physical_object=physical_object, status_code=200)
-
-        except Exception as e:
-            print(e)
-            tb = traceback.format_exc()
-            return create_physical_object(ok=False, info_text="Fehler beim Erstellen des Objekts. " + str(e) + "\n" + tb, status_code=500)
+        db.add(physical_object)
+        db.commit()
+        return create_physical_object(ok=True, info_text="Objekt erfolgreich erstellt.", physical_object=physical_object, status_code=200)
 
 
 class update_physical_object(graphene.Mutation):
@@ -126,7 +112,7 @@ class update_physical_object(graphene.Mutation):
         pictures    = graphene.List(graphene.String, description="List of picture file ids; Override existing pictures")
         manual      = graphene.List(graphene.String, description="List of manual file ids; Override existing manual")
         tags        = graphene.List(graphene.String, description="List of tag ids; Override existing tags")
-        orders      = graphene.List(graphene.String, description="List of order ids; Override existing orders")
+        orders      = graphene.List(graphene.String, description="Not supported; orders are managed through order mutations")
         groups      = graphene.List(graphene.String, description="List of group ids; Override existing groups")
 
     physical_object = graphene.Field(lambda: PhysicalObject)
@@ -135,73 +121,62 @@ class update_physical_object(graphene.Mutation):
     status_code     = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, phys_id, inv_num_internal=None, inv_num_external=None, borrowable=None,
+    @guarded
+    def mutate(root, info, phys_id, inv_num_internal=None, inv_num_external=None, borrowable=None,
                storage_location=None, storage_location2=None, name=None,
                pictures=None, manual=None,
-               tags=None, orders=None, groups=None, faults=None, description=None, deposit=None):
-        
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return update_physical_object(ok=False, info_text="Keine valide session vorhanden", status_code=419)
+               tags=None, orders=None, groups=None, faults=None, description=None, deposit=None,
+               organization_id=None):
+        org_id = org_of_phys(phys_id)
+        require_right(org_id, userRights.inventory_admin)
+        physical_object = db.query(PhysicalObjectModel).get(phys_id)
+        if not physical_object:
+            raise NotFound("Objekt nicht gefunden.")
 
-        if not is_authorised(userRights.inventory_admin, session_user_id, phys_id=phys_id):
-            return update_physical_object(ok=False, info_text=reject_message, status_code=403)
-        
+        if clean_ids(orders):
+            raise InvalidInput("Bestellungen können hier nicht geändert werden.")
+        target_org = org_id
+        if organization_id and organization_id != org_id:
+            # moving an object requires inventory rights in both organisations
+            require_right(organization_id, userRights.inventory_admin)
+            target_org = organization_id
+        db_pictures = require_files_linkable(pictures, target_org)
+        db_manual = require_files_linkable(manual, target_org)
+        db_groups = require_linkable(GroupModel, groups, target_org)
 
+        if target_org != org_id:
+            physical_object.organization_id = target_org
+        if inv_num_internal:
+            physical_object.inv_num_internal = inv_num_internal
+        if inv_num_external:
+            physical_object.inv_num_external = inv_num_external
+        if deposit:
+            physical_object.deposit = deposit
+        if borrowable != None:
+            physical_object.borrowable = borrowable
+        if storage_location:
+            physical_object.storage_location = storage_location
+        if storage_location2:
+            physical_object.storage_location2 = storage_location2
+        if faults:
+            physical_object.faults = faults
+        if name:
+            physical_object.name = name
+        if description:
+            physical_object.description = description
 
-        try:
-            physical_object = PhysicalObjectModel.query.filter(PhysicalObjectModel.phys_id == phys_id).first()
+        if db_pictures:
+            physical_object.pictures = db_pictures
+        if db_manual:
+            physical_object.manual = db_manual
+        if clean_ids(tags):
+            physical_object.tags = _tags(tags)
+        if db_groups:
+            physical_object.groups = db_groups
 
-            # Abort if object does not exist
-            if not physical_object:
-                return update_physical_object(ok=False, info_text="Objekt nicht gefunden.", status_code=404)
-
-            if inv_num_internal:
-                physical_object.inv_num_internal = inv_num_internal
-            if inv_num_external:
-                physical_object.inv_num_external = inv_num_external
-            if deposit:
-                physical_object.deposit = deposit
-            if borrowable != None:
-                physical_object.borrowable = borrowable
-            if storage_location:
-                physical_object.storage_location = storage_location
-            if storage_location2:
-                physical_object.storage_location2 = storage_location2
-            if faults:
-                physical_object.faults = faults
-            if name:
-                physical_object.name = name
-            if description:
-                physical_object.description = description
-
-            if pictures:
-                db_pictures = db.query(FileModel).filter(FileModel.file_id.in_(pictures)).all()
-                physical_object.pictures = db_pictures
-            if manual:
-                db_manual = db.query(FileModel).filter(FileModel.file_id.in_(manual)).all()
-                physical_object.manual = db_manual
-            if tags:
-                db_tags = db.query(TagModel).filter(TagModel.tag_id.in_(tags)).all()
-                physical_object.tags = db_tags
-            if orders:
-                db_orders = db.query(OrderModel).filter(OrderModel.order_id.in_(orders)).all()
-                physical_object.orders = db_orders
-            if groups:
-                db_groups = db.query(GroupModel).filter(GroupModel.group_id.in_(groups)).all()
-                physical_object.groups = db_groups
-
-            db.commit()
-            return update_physical_object(ok=True, info_text="Objekt erfolgreich aktualisiert.",
-                                          physical_object=physical_object, status_code=200)
-
-        except Exception as e:
-            print(e)
-            tb = traceback.format_exc()
-            return update_physical_object(ok=False,
-                                          info_text="Fehler beim Aktualisieren des Objekts. " + str(e) + "\n" + tb, status_code=500)
+        db.commit()
+        return update_physical_object(ok=True, info_text="Objekt erfolgreich aktualisiert.",
+                                      physical_object=physical_object, status_code=200)
 
 
 class delete_physical_object(graphene.Mutation):
@@ -217,28 +192,13 @@ class delete_physical_object(graphene.Mutation):
     status_code = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, phys_id):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return delete_physical_object(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-
-        if not is_authorised(userRights.inventory_admin, session_user_id, phys_id=phys_id):
-            return delete_physical_object(ok=False, info_text=reject_message, status_code=403)
-
-
-
-
-        physical_object = PhysicalObjectModel.query.filter(PhysicalObjectModel.phys_id == phys_id).first()
-
-        if physical_object:
-            db.delete(physical_object)
-            db.commit()
-            return delete_physical_object(ok=True, info_text="Objekt erfolgreich entfernt.", status_code=200)
-        else:
-            return delete_physical_object(ok=False, info_text="Objekt konnte nicht gefunden werden.", status_code=500)
-        
+    @guarded
+    def mutate(root, info, phys_id):
+        require_right(org_of_phys(phys_id), userRights.inventory_admin)
+        physical_object = db.query(PhysicalObjectModel).get(phys_id)
+        db.delete(physical_object)
+        db.commit()
+        return delete_physical_object(ok=True, info_text="Objekt erfolgreich entfernt.", status_code=200)
 
 
 class is_physical_object_available(graphene.Mutation):
@@ -258,33 +218,16 @@ class is_physical_object_available(graphene.Mutation):
     is_available = graphene.Boolean()
 
     @staticmethod
-    def mutate(self, info, phys_id, start_date, end_date):
-
-        physical_object = PhysicalObjectModel.query.filter(PhysicalObjectModel.phys_id == phys_id).first()
-
+    @guarded
+    def mutate(root, info, phys_id, start_date, end_date):
+        require_user()
+        physical_object = db.query(PhysicalObjectModel).get(phys_id)
         if not physical_object:
-            return is_physical_object_available(ok=False, info_text="Objekt nicht gefunden.", status_code=404)
+            raise NotFound("Objekt nicht gefunden.")
 
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return is_physical_object_available(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-        
-        if not is_authorised(userRights.customer, session_user_id, phys_id=phys_id):
-            return is_physical_object_available(ok=False, info_text=reject_message, status_code=403)
-    
-
-        # Check if object is available
-        phys_orders = physical_object.orders
-
-        for phys_order in phys_orders:
+        for phys_order in physical_object.orders:
             order = phys_order.order
-            from_date = order.from_date.date()
-            till_date = order.till_date.date()
-            print("From Date: ", from_date)
-            print("Till Date: ", till_date)
-            if from_date <= end_date and till_date >= start_date:
+            if order.from_date.date() <= end_date and order.till_date.date() >= start_date:
                 return is_physical_object_available(ok=True, info_text="Objekt nicht verfügbar.", is_available=False, status_code=200)
-        
+
         return is_physical_object_available(ok=True, info_text="Objekt verfügbar.", is_available=True, status_code=200)

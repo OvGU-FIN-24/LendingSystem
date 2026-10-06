@@ -1,10 +1,19 @@
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError, InvalidHashError
-from flask import session
+from flask import current_app, session
 import graphene
+from sqlalchemy import func
 
+from authz import guarded, viewer, reset_viewer
 from config import db
+from models import UserAuthEpoch
 from schema import UserModel
+
+LOGIN_FAILED = "Die Anmeldung ist fehlgeschlagen!"
+
+# Verified against for unknown users so both failure paths cost the same
+_ph = PasswordHasher()
+_DUMMY_HASH = _ph.hash("dummy-password-for-timing")
 
 ##################################
 # Mutations for Users login      #
@@ -19,27 +28,30 @@ class login(graphene.Mutation):
     status_code = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, email, password):
-        user = UserModel.query.filter(UserModel.email == email).first()
+    @guarded
+    def mutate(root, info, email, password):
+        user = UserModel.query.filter(func.lower(UserModel.email) == (email or "").strip().lower()).first()
 
-        if not user:
-            return login(ok=False, info_text="Der Nutzer mit der angegeben E-Mail existiert nicht.", status_code=404)
-        else:
-            try:
-                ph = PasswordHasher()
-                ph.verify(user.password_hash, password)
-            except VerificationError:
-                return login(ok=False, info_text="Die Anmeldung ist fehlgeschlagen!", status_code=401)
-            except InvalidHashError:
-                return login(ok=False, info_text="Die Anmeldung ist fehlgeschlagen!", status_code=401)
+        try:
+            _ph.verify(user.password_hash if user else _DUMMY_HASH, password)
+        except (VerificationError, InvalidHashError):
+            return login(ok=False, info_text=LOGIN_FAILED, status_code=401)
+        if user is None:
+            return login(ok=False, info_text=LOGIN_FAILED, status_code=401)
 
-            if ph.check_needs_rehash(user.password_hash):
-                user.password_hash = ph.hash(password)
-                db.add(user)
-                db.commit()
+        if _ph.check_needs_rehash(user.password_hash):
+            user.password_hash = _ph.hash(password)
+            db.commit()
 
-            session['user_id'] = user.user_id
-            return login(ok=True, info_text="Die Anmeldung war erfolgreich!", status_code=200)
+        epoch_row = db.query(UserAuthEpoch).get(user.user_id)
+
+        # New session id on login (no session fixation)
+        session.clear()
+        session['user_id'] = user.user_id
+        session['auth_epoch'] = epoch_row.epoch if epoch_row else 0
+        current_app.session_interface.regenerate(session)
+        reset_viewer()
+        return login(ok=True, info_text="Die Anmeldung war erfolgreich!", status_code=200)
 
 class check_session(graphene.Mutation):
     ok          = graphene.Boolean()
@@ -48,8 +60,9 @@ class check_session(graphene.Mutation):
     user_id     = graphene.String()
 
     @staticmethod
-    def mutate(self, info):
-        user_id = session.get('user_id')
+    @guarded
+    def mutate(root, info):
+        user_id = viewer().user_id
         if user_id:
             return check_session(ok=True, info_text='Es liegt eine gültige Session vor.', user_id=user_id, status_code=200)
         else:
@@ -61,9 +74,12 @@ class logout(graphene.Mutation):
     status_code = graphene.Int()
 
     @staticmethod
-    def mutate(self, info):
-        if session.get('user_id'):
-            session.pop('user_id')
+    @guarded
+    def mutate(root, info):
+        logged_in = bool(session.get('user_id'))
+        session.clear()
+        reset_viewer()
+        if logged_in:
             return logout(ok=True, info_text='Logout erfolgreich!', status_code=200)
         else:
             return logout(ok=False, info_text='User nicht angemeldet.', status_code=404)

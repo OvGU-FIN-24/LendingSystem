@@ -1,15 +1,41 @@
 from argon2 import PasswordHasher
+from argon2.exceptions import VerificationError, InvalidHashError
 from flask import session
 import graphene
-import os
-from string import Template
-import traceback
-import uuid
+from sqlalchemy import func
 
-from authorization_check import reject_message
-from config import db, template_directory
+from authz import guarded, require_user, bump_auth_epoch, reset_viewer, Forbidden, NotFound
+from config import db
 from schema import User, UserModel
-from sendMail import sendMail
+from validation import validate_email, validate_password
+
+EMAIL_IN_USE = "Die angegebene E-Mail wird bereits verwendet."
+WRONG_PASSWORD = "Das aktuelle Passwort ist falsch."
+
+
+def _email_taken(email, except_user_id=None):
+    query = UserModel.query.filter(func.lower(UserModel.email) == email)
+    if except_user_id:
+        query = query.filter(UserModel.user_id != except_user_id)
+    return query.first() is not None
+
+
+def _set_optional_fields(user, country, city, postcode, street, house_number, phone_number, matricle_number):
+    if country:
+        user.country = country
+    if city:
+        user.city = city
+    if postcode:
+        user.postcode = postcode
+    if street:
+        user.street = street
+    if house_number:
+        user.house_number = house_number
+    if phone_number:
+        user.phone_number = phone_number
+    if matricle_number:
+        user.matricle_number = matricle_number
+
 
 ##################################
 # Mutations for Users            #
@@ -41,50 +67,26 @@ class create_user(graphene.Mutation):
     status_code = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, email, last_name, first_name, password, country=None, city=None, postcode=None, street=None, house_number=None, phone_number=None, matricle_number=None):
-        # Check if email is a valid University email address
-        # TODO: remove prhn.dynpv.net for production: only for development needed
-        allowed_email_domains = ["ovgu.de", "prhn.dynpc.net"]
-        if not any([email.endswith(domain) for domain in allowed_email_domains]):
-            return create_user(ok=False, info_text="Nur E-Mail Adressen mit der Endung 'ovgu.de' sind erlaubt.", status_code=403)
-        
-        try:
-            user_exists = UserModel.query.filter_by(email=email).first()
-            if user_exists:
-                return create_user(ok=False, info_text="Die angegebene E-Mail wird bereits verwendet.", status_code=409)
-            else:
-                ph = PasswordHasher()
-                password_hashed = ph.hash(password)
-                user = UserModel(first_name=first_name, last_name=last_name, email=email, password_hash=password_hashed)
+    @guarded
+    def mutate(root, info, email, last_name, first_name, password, country=None, city=None, postcode=None, street=None, house_number=None, phone_number=None, matricle_number=None):
+        email = validate_email(email)
+        validate_password(password)
 
-                if country:
-                    user.country = country
-                if city:
-                    user.city = city
-                if postcode:
-                    user.postcode = postcode
-                if street:
-                    user.street = street
-                if house_number:
-                    user.house_number = house_number
+        if _email_taken(email):
+            return create_user(ok=False, info_text=EMAIL_IN_USE, status_code=409)
 
-                if phone_number:
-                    user.phone_number = phone_number
-                if matricle_number:
-                    user.matricle_number = matricle_number
+        user = UserModel(first_name=first_name, last_name=last_name, email=email,
+                         password_hash=PasswordHasher().hash(password))
+        _set_optional_fields(user, country, city, postcode, street, house_number, phone_number, matricle_number)
 
-                db.add(user)
-                db.commit()
-                return create_user(ok=True, info_text="Der Nutzer wurde erfolgreich angelegt.", user=user, status_code=200)
-        except Exception as e:
-            print(e)
-            tb = traceback.format_exc()
-            return create_user(ok=False, info_text="Fehler beim Erstellen des Nutzers. " + str(e) + "\n" + str(tb), status_code=500)
+        db.add(user)
+        db.commit()
+        return create_user(ok=True, info_text="Der Nutzer wurde erfolgreich angelegt.", user=user, status_code=200)
 
 
 class update_user(graphene.Mutation):
     """
-    Updates content of the user with the given user_id.
+    Updates content of the own user. Changing email or password requires current_password.
     """
 
     class Arguments:
@@ -94,6 +96,7 @@ class update_user(graphene.Mutation):
         last_name   = graphene.String(required=False)
         first_name  = graphene.String(required=False)
         password    = graphene.String(required=False)
+        current_password = graphene.String(required=False)
 
         # Optional user arguments
         country         = graphene.String(required=False)
@@ -110,59 +113,46 @@ class update_user(graphene.Mutation):
     status_code = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, user_id, email=None, last_name=None, first_name=None, password=None, country=None, city=None, postcode=None, street=None, house_number=None, phone_number=None, matricle_number=None):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return update_user(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-        
-        if not (session_user_id == user_id):
-            return update_user(ok=False, info_text=reject_message, status_code=403)
-        
-        try:
-            user = UserModel.query.filter(UserModel.user_id == user_id).first()
+    @guarded
+    def mutate(root, info, user_id, email=None, last_name=None, first_name=None, password=None, current_password=None, country=None, city=None, postcode=None, street=None, house_number=None, phone_number=None, matricle_number=None):
+        v = require_user()
+        if v.user_id != user_id:
+            raise Forbidden()
 
-            if not user:
-                return update_user(ok=False, info_text="User not found. Can only query by user_id.", status_code=404)
-            if email:
-                user.email = email
-            if last_name:
-                user.last_name = last_name
-            if first_name:
-                user.first_name = first_name
-            if password:
-                ph = PasswordHasher()
-                user.password_hash = ph.hash(password)
+        user = UserModel.query.filter(UserModel.user_id == user_id).first()
+        if not user:
+            raise NotFound("Nutzer nicht gefunden.")
 
-            if country:
-                user.country = country
-            if city:
-                user.city = city
-            if postcode:
-                user.postcode = postcode
-            if street:
-                user.street = street
-            if house_number:
-                user.house_number = house_number
+        if email or password:
+            try:
+                PasswordHasher().verify(user.password_hash, current_password or "")
+            except (VerificationError, InvalidHashError):
+                raise Forbidden(WRONG_PASSWORD)
 
-            if phone_number:
-                user.phone_number = phone_number
-            if matricle_number:
-                user.matricle_number = matricle_number
+        if email:
+            email = validate_email(email)
+            if _email_taken(email, except_user_id=user.user_id):
+                return update_user(ok=False, info_text=EMAIL_IN_USE, status_code=409)
+            user.email = email
+        if password:
+            validate_password(password)
+            user.password_hash = PasswordHasher().hash(password)
+            # invalidate all other sessions; keep the current one valid
+            session['auth_epoch'] = bump_auth_epoch(user.user_id)
+            reset_viewer()
+        if last_name:
+            user.last_name = last_name
+        if first_name:
+            user.first_name = first_name
+        _set_optional_fields(user, country, city, postcode, street, house_number, phone_number, matricle_number)
 
-            db.commit()
-            return update_user(ok=True, info_text="User updated successfully", user=user, status_code=200)
-
-        except Exception as e:
-            print(e)
-            tb = traceback.format_exc()
-            return update_user(ok=False, info_text="Error updating user: " + str(e) + "\n" + str(tb), status_code=500)
+        db.commit()
+        return update_user(ok=True, info_text="User updated successfully", user=user, status_code=200)
 
 
 class delete_user(graphene.Mutation):
     """
-    Deletes the user with the given user_id.
+    Deletes the own user.
     """
 
     class Arguments:
@@ -173,22 +163,17 @@ class delete_user(graphene.Mutation):
     status_code = graphene.Int()
 
     @staticmethod
-    def mutate(self, info, user_id):
-        # Check if user is authorised
-        try:
-            session_user_id = session['user_id']
-        except:
-            return delete_user(ok=False, info_text="Keine valide session vorhanden", status_code=419)
-        
-        if not (session_user_id == user_id):
-            return delete_user(ok=False, info_text=reject_message, status_code=403)
-        
-
+    @guarded
+    def mutate(root, info, user_id):
+        v = require_user()
+        if v.user_id != user_id:
+            raise Forbidden()
 
         user = UserModel.query.filter(UserModel.user_id == user_id).first()
-        if user:
-            db.delete(user)
-            db.commit()
-            return delete_user(ok=True, info_text="Nutzer erfolgreich entfernt.", status_code=200)
-        else:
-            return delete_user(ok=False, info_text="Nutzer konnte nicht entfernt werden.", status_code=404)
+        if not user:
+            raise NotFound("Nutzer konnte nicht entfernt werden.")
+        db.delete(user)
+        db.commit()
+        session.clear()
+        reset_viewer()
+        return delete_user(ok=True, info_text="Nutzer erfolgreich entfernt.", status_code=200)
