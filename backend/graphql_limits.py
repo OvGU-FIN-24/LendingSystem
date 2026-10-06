@@ -30,6 +30,12 @@ def depth_limit(max_depth):
         """Rejects operations with more than max_depth nested fields;
         fragments count with the depth of their fields."""
 
+        def __init__(self, context):
+            super().__init__(context)
+            # a fragment's depth does not depend on where it is spread, so
+            # each fragment is measured once (linear in the document size)
+            self._fragment_depths = {}
+
         def enter_OperationDefinition(self, node, *args):
             if self._depth(node.selection_set, frozenset()) > max_depth:
                 self.context.report_error(GraphQLError(TOO_DEEP, [node]))
@@ -43,12 +49,16 @@ def depth_limit(max_depth):
                     depth = 1 + self._depth(selection.selection_set, fragments)
                 elif isinstance(selection, ast.FragmentSpread):
                     name = selection.name.value
-                    fragment = self.context.get_fragment(name)
-                    # unknown fragments and cycles are reported by other rules
-                    if fragment is None or name in fragments:
-                        continue
-                    depth = self._depth(fragment.selection_set,
-                                        fragments | {name})
+                    depth = self._fragment_depths.get(name)
+                    if depth is None:
+                        fragment = self.context.get_fragment(name)
+                        # unknown fragments and cycles are reported by other
+                        # rules
+                        if fragment is None or name in fragments:
+                            continue
+                        depth = self._depth(fragment.selection_set,
+                                            fragments | {name})
+                        self._fragment_depths[name] = depth
                 else:
                     depth = self._depth(selection.selection_set, fragments)
                 deepest = max(deepest, depth)

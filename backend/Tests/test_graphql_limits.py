@@ -6,6 +6,7 @@ Run from backend/:
 """
 import os
 import sys
+import time
 import unittest
 
 _BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -88,6 +89,23 @@ class GraphQLLimitsTestCase(unittest.TestCase):
         self.assertNotIn("errors", body)
         status, body = self.post(self.chain(12))
         self.assert_rejected(status, body)
+
+    def test_fragment_depth_counted(self):
+        status, body = self.post(
+            "query { ...F } fragment F on Query " + self.chain(12))
+        self.assert_rejected(status, body)
+
+    def test_fragment_fan_out_validated_quickly(self):
+        # each fragment spreads the next one twice: 2^24 paths in < 1 KB
+        n = 24
+        parts = ["query { ...F0 }"]
+        parts += ["fragment F%d on Query { ...F%d ...F%d }" % (i, i + 1, i + 1)
+                  for i in range(n)]
+        parts.append("fragment F%d on Query { __typename }" % n)
+        start = time.monotonic()
+        status, body = self.post("\n".join(parts))
+        self.assertLess(time.monotonic() - start, 2, body)
+        self.assertEqual(status, 200, body)
 
     def test_very_deep_query_rejected_without_internal_error(self):
         query = "{ " + "filterGroups { " * 500 + "name" + " }" * 501
