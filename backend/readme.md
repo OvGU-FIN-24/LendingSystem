@@ -136,3 +136,31 @@ fragment phyobj on PhysicalObject{
     }
 }
 ```
+# Operator: password reset
+
+Users request a reset link on the login page. The link is valid for one hour and works once.
+Setting a new password signs the user out of all other sessions.
+
+Self-service reset needs both `mail_server_address` and `public_base_url` in `backend.env`.
+Without them no link is created, but the login page shows the same message.
+
+Operator commands (no mail needed; the scheduler is not started):
+
+```bash
+# set a password interactively (minimum 10 characters)
+docker compose exec backend python manage.py set-password user@ovgu.de
+# print a one-hour reset link for the user (needs public_base_url)
+docker compose exec backend python manage.py reset-link user@ovgu.de
+```
+
+## Upgrade note: reset mail template
+
+The reset mail now contains a link instead of a password, and the template placeholder changed
+from `$password` to `$link`. The template lives in the `template-files` volume, which is seeded only
+on the first deploy, so existing installs keep the old template. The backend detects a template without `$link`,
+logs a warning and sends a built-in German text instead. To use your own text again, copy the new
+`templates/password_reset_template.html` into the volume and adapt it:
+
+```bash
+docker compose cp templates/password_reset_template.html backend:/backend/templates/password_reset_template.html
+```
