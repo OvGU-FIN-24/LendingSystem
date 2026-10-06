@@ -2,6 +2,8 @@
 
 This guide covers the production deployment in `docker-compose.yml`: first deployment, upgrading an existing deployment, updates, backup and restore, optional HTTPS with Let's Encrypt, template editing and troubleshooting.
 
+> **Warning: not ready for the public internet yet.** The application has known security issues that are still being fixed. Until they are fixed, run it only on an internal network or behind a VPN, and do not make it reachable from the internet. The hardening in this stack (rate limits, security headers, container restrictions) reduces the risk but does not replace those fixes.
+
 ## Overview
 
 The stack has three services:
@@ -9,7 +11,7 @@ The stack has three services:
 | Service | Image | Role |
 |---------|-------|------|
 | `frontend` | `nginxinc/nginx-unprivileged` (built from `frontend/`) | Serves the web app, `/pictures/` and `/pdf/`; forwards `/api/` to the backend. Listens on 8080 inside the container. |
-| `backend` | `python:3.12.15-slim` (built from `backend/`) | GraphQL API (gunicorn, one worker), runs as uid 10001. |
+| `backend` | `python:3.12.15-slim` (built from `backend/`) | GraphQL API (gunicorn, one worker with four threads), runs as uid 10001. |
 | `database` | `mysql:9.7.2` (LTS) | Data. Reachable only from the backend. |
 
 Only the frontend publishes a port: `HTTP_PORT` (default `80`). It serves **plain HTTP**. TLS is expected to be terminated in front of the stack by a reverse proxy or load balancer, which must send `X-Forwarded-Proto` and `X-Forwarded-For`. If there is no such proxy, use the Let's Encrypt overlay ([HTTPS with Let's Encrypt](#https-with-lets-encrypt)).
@@ -33,7 +35,7 @@ Requirements: Docker Engine with Docker Compose v2.23.1 or newer (`docker compos
 |-----|---------|---------|
 | `COMPOSE_PROJECT_NAME` | `lendingsystem` | Only set this when upgrading an old deployment whose volumes have a different prefix. |
 | `HTTP_PORT` | `80` | Published port, `[ip:]port`. Use e.g. `127.0.0.1:8080` when the reverse proxy runs on the same host. |
-| `TRUSTED_PROXY_CIDR` | `127.0.0.1/32` | IP or CIDR of the reverse proxy, as nginx sees it. Its `X-Forwarded-For` header is used as the client IP in the access log (logging only). A proxy on the same host reaches nginx through Docker's port forwarding, so nginx sees the gateway of the `<project>_public` network, not `127.0.0.1`; see [Trusted proxy address](#trusted-proxy-address). |
+| `TRUSTED_PROXY_CIDR` | `127.0.0.1/32` | IP or CIDR of the reverse proxy, as nginx sees it. Only from this address does nginx accept `X-Forwarded-For` (client IP for the access log and the rate limit) and `X-Forwarded-Proto`. A proxy on the same host reaches nginx through Docker's port forwarding, so nginx sees the gateway of the `<project>_public` network, not `127.0.0.1`; see [Trusted proxy address](#trusted-proxy-address). |
 | `DB_APP_USER` | `lending` | DB user of the backend. |
 | `DB_ROOT_PASSWORD_FILE`, `DB_APP_PASSWORD_FILE` | `./secrets/…` | Secret file paths. |
 | `COMPOSE_FILE`, `DOMAIN`, `ACME_EMAIL` | unset | Only for the Let's Encrypt overlay. |
@@ -78,7 +80,9 @@ docker compose ps                 # wait until all services are "healthy" (first
 
 On the first start MySQL creates the database `LendingSystem` and the user `DB_APP_USER`. The backend creates the tables and the initial administrator. The volumes `template-files` and `image-files` are seeded with the default templates and the placeholder picture. Docker seeds a volume only if it is empty when first mounted; existing content is never overwritten. See [Placeholder picture](#placeholder-picture).
 
-Then point the reverse proxy at `http://<host>:HTTP_PORT`. It must set `X-Forwarded-Proto: https` and `X-Forwarded-For`, and allow request bodies of at least 100 MB (file uploads).
+Then point the reverse proxy at `http://<host>:HTTP_PORT`. It must set `X-Forwarded-Proto: https` and `X-Forwarded-For`, and allow request bodies of at least 100 MB (file uploads). Set `TRUSTED_PROXY_CIDR` to its address ([Trusted proxy address](#trusted-proxy-address)). It should also send `Strict-Transport-Security` (see [Security settings](#security-settings)).
+
+The initial administrator password from `backend.env` stays valid until it is changed. After the first login, change it in the web app (profile page) or as described in [Changing the administrator password](#changing-the-administrator-password).
 
 Check:
 
@@ -92,10 +96,11 @@ This applies to deployments started from the old `docker-compose.yml` (MySQL 9.0
 
 0. **Find the project name.** Run `docker volume ls | grep database-data`. The part before `_database-data` is the project name. If it is not `lendingsystem`, you will set `COMPOSE_PROJECT_NAME` to it in step 4.
 
-1. **Back up**, with the old stack still running:
+1. **Back up**, with the old stack still running. `umask 077` makes the files readable only by you; they contain personal data and password hashes:
 
    ```sh
-   docker compose exec -T database sh -c 'mysqldump -uroot -p"$(cat /run/secrets/db-password)" --single-transaction --routines --set-gtid-purged=OFF --databases LendingSystem' > backup-$(date +%F).sql
+   umask 077
+   docker compose exec -T database sh -c 'MYSQL_PWD="$(cat /run/secrets/db-password)" mysqldump -uroot --single-transaction --routines --set-gtid-purged=OFF --databases LendingSystem' > backup-$(date +%F).sql
    P=<project name from step 0>
    for v in image-files pdf-files template-files; do
      docker run --rm -v ${P}_$v:/v:ro -v "$PWD":/b alpine:3.22 tar czf /b/$v.tgz -C /v .
@@ -168,6 +173,15 @@ This applies to deployments started from the old `docker-compose.yml` (MySQL 9.0
 
       Check: `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:${HTTP_PORT:-80}/pictures/1741980710.2106326_platzhalter_bild.png` returns `200`.
 
+13. **Rotate all credentials (mandatory).** Treat the passwords and keys of the old installation as known to others (for example, the old README suggested a default administrator password) and change all of them now:
+
+    - **Administrator (root) password.** The backend never changes an existing administrator from `backend.env`; editing `root_user_password` has no effect on an existing installation. Change the password as described in [Changing the administrator password](#changing-the-administrator-password), then check that the old password no longer works. Do the same for every other account that may still use an old or shared password.
+    - **`secret_key`** in `backend.env`: generate a new one (`python3 -c "import secrets;print(secrets.token_hex(32))"`). All users are logged out.
+    - **SMTP password** (`sender_email_password`): change it at the mail provider, then in `backend.env`.
+    - **Database passwords:** rotate the MySQL root password that was taken over from `db-password.txt` (see [Rotating the database passwords](#rotating-the-database-passwords)). Do not reuse old database passwords anywhere.
+
+    Then apply the changes: `docker compose up -d --force-recreate backend`.
+
 **Rollback:** `docker compose down`, remove the database volume (`docker volume rm ${P}_database-data`), check out the previous version, put `db-password.txt` back, start the old stack and restore the dump from step 1 ([Restore](#restore)), using secret name `db-password` instead of `db-root-password`.
 
 ## Updating
@@ -186,11 +200,14 @@ Templates are copied into the `template-files` volume only when it is empty. Tem
 
 Backups are manual. Run them regularly (e.g. via cron) and keep copies off the host. `P` is the project name (`lendingsystem` unless `COMPOSE_PROJECT_NAME` is set).
 
+Backups contain all personal data and the password hashes. Keep them in a directory only you can read (`install -d -m 700 backups`), create them with `umask 077` as below, and encrypt every copy that leaves the host, e.g. with [age](https://age-encryption.org) (`age -r <recipient> -o backup.sql.age backup-YYYY-MM-DD.sql`) or `gpg --symmetric`.
+
 ### Backup
 
 ```sh
 P=lendingsystem
-docker compose exec -T database sh -c 'mysqldump -uroot -p"$(cat /run/secrets/db-root-password)" --single-transaction --routines --set-gtid-purged=OFF --databases LendingSystem' > backup-$(date +%F).sql
+umask 077
+docker compose exec -T database sh -c 'MYSQL_PWD="$(cat /run/secrets/db-root-password)" mysqldump -uroot --single-transaction --routines --set-gtid-purged=OFF --databases LendingSystem' > backup-$(date +%F).sql
 for v in image-files pdf-files template-files; do
   docker run --rm -v ${P}_$v:/v:ro -v "$PWD":/b alpine:3.22 tar czf /b/$v-$(date +%F).tgz -C /v .
 done
@@ -204,7 +221,7 @@ With the Let's Encrypt overlay, also back up `caddy-data` the same way (it holds
 P=lendingsystem
 docker compose stop backend frontend
 docker compose up -d database          # wait for "healthy"
-docker compose exec -T database sh -c 'mysql -uroot -p"$(cat /run/secrets/db-root-password)"' < backup-YYYY-MM-DD.sql
+docker compose exec -T database sh -c 'MYSQL_PWD="$(cat /run/secrets/db-root-password)" mysql -uroot' < backup-YYYY-MM-DD.sql
 for v in image-files pdf-files template-files; do
   docker run --rm -v ${P}_$v:/v -v "$PWD":/b alpine:3.22 sh -c "find /v -mindepth 1 -delete && tar xzf /b/$v-YYYY-MM-DD.tgz -C /v"
 done
@@ -233,6 +250,8 @@ ACME_EMAIL=ops@example.org
 
 Then run `docker compose up -d` and check with `docker compose logs caddy` that the certificate was obtained. Keep `session_cookie_secure=1`.
 
+Caddy sends `Strict-Transport-Security: max-age=31536000`, so browsers use only HTTPS for this domain for one year after the first visit.
+
 Certificates are stored in the `caddy-data` volume. Back it up; losing it forces a new issuance, and Let's Encrypt rate-limits repeated issuance.
 
 Local test: with `DOMAIN=localhost`, Caddy uses its own internal CA instead of Let's Encrypt (`curl -k https://localhost/`).
@@ -252,7 +271,7 @@ Items without pictures show `/pictures/1741980710.2106326_platzhalter_bild.png`.
 
 ## Trusted proxy address
 
-`TRUSTED_PROXY_CIDR` only affects the client IP in the frontend access log. It must match the address nginx sees for the reverse proxy:
+nginx accepts `X-Forwarded-For` and `X-Forwarded-Proto` only from `TRUSTED_PROXY_CIDR`. The client IP is used for the access log and the rate limit: if the value is wrong, all users share the rate limit of the proxy's address and get `429` errors sooner. It must match the address nginx sees for the reverse proxy:
 
 - **Proxy on another host:** that host's IP, e.g. `10.0.0.5/32`.
 - **Proxy on the same host** (e.g. `HTTP_PORT=127.0.0.1:8080`): connections arrive from the gateway of the compose network. Look it up after the first start and put it (or the whole subnet) into `.env`, then run `docker compose up -d` again:
@@ -262,6 +281,65 @@ Items without pictures show `/pictures/1741980710.2106326_platzhalter_bild.png`.
   ```
 
   Replace `lendingsystem` if you set `COMPOSE_PROJECT_NAME`. Only trust addresses that clients cannot reach directly.
+
+## Security settings
+
+The stack applies these limits and headers. Change them in `frontend/nginx/default.conf.template`, `backend/Dockerfile` or `docker-compose.yml` and rebuild.
+
+- **Rate limit:** `/api/` accepts 5 requests per second per client IP, with bursts up to 40; more requests get `429 Too Many Requests`. The client IP comes from the reverse proxy ([Trusted proxy address](#trusted-proxy-address)).
+- **Request types:** `POST /api/…` accepts only `application/json` and `multipart/form-data` (file uploads); other content types get `415`.
+- **Sizes and timeouts:** request bodies up to 100 MB on `/api/` and 1 MB elsewhere. The backend has 30 seconds per request (gunicorn `--timeout 30`, nginx `proxy_read_timeout 30s`).
+- **Backend workers:** one gunicorn worker with four threads. Do not add workers: the job scheduler (reminder mails) runs in every worker, so more workers would send duplicate mails.
+- **Headers:** `Content-Security-Policy` (scripts only from this site, no framing), `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy` and `X-Content-Type-Options: nosniff`.
+- **Uploaded files** (`/pictures/`, `/pdf/`) are served with `Content-Security-Policy: sandbox`, so scripts inside a file do not run on this site when the file is opened directly. SVG pictures open as a download.
+- **HSTS** is not set by nginx, because nginx only speaks plain HTTP. The TLS terminator sets it: the Caddy overlay does this automatically; an upstream reverse proxy should send `Strict-Transport-Security: max-age=31536000` on HTTPS responses.
+- **Containers:** all Linux capabilities are dropped (the database keeps the few its entrypoint needs to switch to the `mysql` user), `no-new-privileges` is set, the root filesystems are read-only (temporary files in `tmpfs`), and memory and process limits apply (database 1 GB, backend 512 MB, frontend 256 MB). Raise `mem_limit` in `docker-compose.yml` if the database is killed for lack of memory (`docker compose ps` shows restarts, `docker inspect --format '{{.State.OOMKilled}}' <container>`).
+
+## Changing the administrator password
+
+The backend creates the administrator from `root_user_name`/`root_user_password` only if that user does not exist. Later changes to these values are ignored, so a password set during an earlier installation stays valid until it is changed.
+
+- **In the web app:** log in as the administrator, open the profile page and change the password.
+- **Without a working login** (forgotten password, or the account was locked by a password reset): set a new password directly in the database. The commands ask for the new password without echoing it:
+
+  ```sh
+  read -rs NEW_PW
+  HASH=$(printf '%s' "$NEW_PW" | docker compose exec -T backend python -c 'import sys; from argon2 import PasswordHasher; print(PasswordHasher().hash(sys.stdin.read()))')
+  unset NEW_PW
+  docker compose exec -T database sh -c 'MYSQL_PWD="$(cat /run/secrets/db-root-password)" mysql -uroot LendingSystem' <<SQL
+  UPDATE \`user\` SET password_hash='$HASH' WHERE email='<root_user_name>';
+  SQL
+  ```
+
+  Replace `<root_user_name>` with the login of the account. The same works for any user.
+
+Check that the old password is rejected and the new one works.
+
+## Rotating the database passwords
+
+- **MySQL root password:**
+
+  ```sh
+  NEW=$(openssl rand -base64 32 | tr -d '/+=')
+  docker compose exec -T database sh -c 'MYSQL_PWD="$(cat /run/secrets/db-root-password)" mysql -uroot' <<SQL
+  ALTER USER IF EXISTS 'root'@'localhost' IDENTIFIED BY '$NEW';
+  ALTER USER IF EXISTS 'root'@'%' IDENTIFIED BY '$NEW';
+  SQL
+  (umask 077; printf '%s\n' "$NEW" > secrets/db-root-password.txt)
+  ```
+
+- **Backend DB user** (`DB_APP_USER`, default `lending`):
+
+  ```sh
+  NEW=$(openssl rand -base64 32 | tr -d '/+=')
+  docker compose exec -T database sh -c 'MYSQL_PWD="$(cat /run/secrets/db-root-password)" mysql -uroot' <<SQL
+  ALTER USER 'lending'@'%' IDENTIFIED BY '$NEW';
+  SQL
+  printf '%s\n' "$NEW" > secrets/db-app-password.txt && chmod 644 secrets/db-app-password.txt
+  docker compose restart backend
+  ```
+
+The secret files are mounted, so the containers see the new content immediately; MySQL itself keeps the password stored in its data directory.
 
 ## Editing templates
 
@@ -286,4 +364,7 @@ The pages read the files on each request; no restart is needed. To take over the
 | Login works but the session is lost immediately | The browser reached the site over plain HTTP while `session_cookie_secure=1`. Use HTTPS, or `0` for local tests only. |
 | Upload fails with permission denied | Run the `chown` from upgrade step 9. |
 | Upload fails with 413 | The reverse proxy in front limits body size; allow at least 100 MB. |
+| Requests fail with 429 | Rate limit ([Security settings](#security-settings)). If all users are affected, check `TRUSTED_PROXY_CIDR`: nginx may see every request as coming from the proxy. |
+| API requests fail with 415 | The client sends a `Content-Type` other than `application/json` or `multipart/form-data`. |
+| Backend log `WORKER TIMEOUT` | A request took longer than 30 seconds and was aborted. |
 | Service health | `docker compose ps`, `docker compose logs <service>`. Logs rotate at 3 × 10 MB per container. |

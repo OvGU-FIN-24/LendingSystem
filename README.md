@@ -15,6 +15,8 @@ An equipment lending system for organisations at Otto von Guericke University Ma
 
 Run the LendingSystem only on an internal network or behind a VPN until the known application security issues are resolved. Do not expose it directly to the internet.
 
+When upgrading an existing installation, change the administrator password, `secret_key`, the SMTP password and the database passwords (upgrade step 13 in [docs/deploy/operations.md](docs/deploy/operations.md)). The stack's security settings (rate limits, headers, container restrictions) are described there under "Security settings".
+
 ## Quick start (Docker Compose)
 
 Requirements: Docker Engine with Docker Compose v2.23.1 or newer.
