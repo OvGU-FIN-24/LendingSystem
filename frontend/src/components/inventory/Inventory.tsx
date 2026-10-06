@@ -19,6 +19,7 @@ import packageJson from '../../../package.json';
 
 import CalendarQuerryNew from "../../core/input/Buttons/Calendar_Querry_New";
 import { useLoginStatus } from "../../context/LoginStatusContext";
+import { AvailabilityInfo, GroupAvailabilityInfo, useAvailability } from "./Availability";
 
 export function Inventory(): JSX.Element {
   const loginDispatcher = useLoginStatus();
@@ -46,6 +47,12 @@ export function Inventory(): JSX.Element {
     return product;
   });
   console.log(products);
+
+  // Public availability (dates only) of every listed object, including group members
+  const availability = useAvailability(products.flatMap(product =>
+    product.physId.startsWith("group")
+      ? (product.physicalObjects ?? []).map(obj => obj.physId)
+      : [product.physId]));
 
   const [showModal, setShowModal] = useState<boolean>(false);
   const [selectedProduct, setSelectedProduct] = useState<InventoryItem | null>(null);
@@ -333,7 +340,9 @@ export function Inventory(): JSX.Element {
                 <div style={descriptionContentStyle}>Kaution: {product.deposit/100} €</div>
                 <div style={descriptionContentStyle}>Organisation: {product.organization}</div>
                 <div style={descriptionContentStyle}>Mängel: {product.defects}</div>
-                
+                {product.physId.startsWith("group")
+                  ? <GroupAvailabilityInfo memberIds={(product.physicalObjects ?? []).map(obj => obj.physId)} ranges={availability} />
+                  : <AvailabilityInfo ranges={availability.get(product.physId) ?? []} />}
                 
                 <div>
                   <button style={addToCartButtonStyle} onClick={() => openModal(product)}>
@@ -393,6 +402,7 @@ export function Inventory(): JSX.Element {
                       </div>
                       
                       <div style={descriptionContentStyle}>Mängel: {product.defects}</div>
+                      <AvailabilityInfo ranges={availability.get(product.physId) ?? []} />
                     </div>
                   </div>
                 ))}
