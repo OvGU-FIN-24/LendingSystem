@@ -78,8 +78,12 @@ class create_order(graphene.Mutation):
         organization = db.query(OrganizationModel).get(organization_id)
         executive_user = db.query(UserModel).get(v.user_id)
 
-        # any university user may borrow: join the organisation as customer on the first order
-        if v.right_in(organization_id) is None:
+        # any university user may borrow: join the organisation as customer
+        # on the first order; watchers may only look
+        right = v.right_in(organization_id)
+        if right == userRights.watcher:
+            raise Forbidden()
+        if right is None:
             db.add(Organization_UserModel(organization_id=organization_id, user_id=v.user_id,
                                           rights=userRights.customer))
             db.flush()

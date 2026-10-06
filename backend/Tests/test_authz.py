@@ -268,6 +268,16 @@ class A4Orders(SecurityTestCase):
         order = db.query(Order).filter(Order.order_id != self.ids["order"]).one()
         self.assertEqual(order.deposit, 10)
 
+    def test_a4_4_watcher_cannot_create_order(self):
+        db.add(Organization_User(organization_id=self.ids["org_a"], user_id=self.ids["u"],
+                                 rights=userRights.watcher))
+        db.commit()
+        resp = self.gql(self.client_for("u"), CREATE_ORDER, {"objs": [self.ids["obj_a2"]]})
+        self.assert_rejected(resp, "createOrder", 403)
+        self.assertEqual(db.query(Order).filter(Order.order_id != self.ids["order"]).count(), 0)
+        self.assertEqual(db.query(Organization_User).get((self.ids["org_a"], self.ids["u"])).rights,
+                         userRights.watcher)
+
     def test_a4_5_borrower_cannot_accept_own_order(self):
         resp = self.gql(self.client_for("bob"), ORDER_STATUS,
                         {"order": self.ids["order"], "objs": [self.ids["obj50"]], "s": "accepted"})
