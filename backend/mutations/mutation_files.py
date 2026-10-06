@@ -33,7 +33,7 @@ class upload_file(graphene.Mutation):
 
     @staticmethod
     @guarded
-    def mutate(root, info, file, **targets):
+    def mutate(root, info, file, show_index=None, **targets):
         _authorize_upload(**targets)
         file_type = _file_type(file.filename)
         file_name = _store(file, file_type)
@@ -45,7 +45,7 @@ class upload_file(graphene.Mutation):
             picture_id=targets.get("phys_picture_id"),
             manual_id=targets.get("phys_manual_id"),
             group_id=targets.get("group_id"),
-            show_index=targets.get("show_index") or None,
+            show_index=show_index or None,
         )
         organization_id = targets.get("organization_id")
         if organization_id:
@@ -60,7 +60,7 @@ class upload_file(graphene.Mutation):
 
 
 def _authorize_upload(phys_picture_id=None, phys_manual_id=None,
-                      organization_id=None, group_id=None, show_index=None):
+                      organization_id=None, group_id=None):
     """
     Authorise against every given target. Without a target the file stays
     unattached (upload first, attach later), which staff of any organisation
