@@ -1,51 +1,19 @@
 import React, { useState } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { useLoginStatus } from "../../context/LoginStatusContext";
 import { Orders } from "./orders";
 import { Login } from "../login/Login";
-import { gql, useMutation, useQuery } from "@apollo/client";
+import { gql, useMutation } from "@apollo/client";
 import { useLoginStatusDispatcher } from "../../context/LoginStatusContext";
-import { useUpdateUserRights } from "../../hooks/user-helper";
 import { useLogout } from "../../hooks/user-helper";
-import { OrganizationManagement } from "./organizationManagement";
 import './Profile.css';
 
-const CHECK_EMAIL_EXISTENCE = gql`
-  query CheckEmail($email: String!) {
-    checkEmailExists(email: $email) {
-      exists
-    }
-  }
-`;
-
-const CHANGE_RIGHTS = gql`
-  mutation updateUserRights($newRights: String,
-  $organizationId: String
-  $userId: String) {
-    updateUserRights(newRights: $newRights,
-    organizationId: $organizationId,
-    userId: $userId) {
-      ok,
-      infoText,
-      statusCode
-    }
-  }
-`;
-
 const CHANGE_PASSWORD = gql`
-mutation updateUser($password: String, $userId: String!){
-  updateUser(password: $password, userId: $userId){
+mutation updateUser($password: String, $currentPassword: String, $userId: String!){
+  updateUser(password: $password, currentPassword: $currentPassword, userId: $userId){
     ok
     statusCode
     infoText
-  }
-}
-`;
-
-const GET_USERID = gql`
-query filterUsers($roleEmail: String){
-  filterUsers(email: $roleEmail){
-    userId
   }
 }
 `;
@@ -61,8 +29,8 @@ mutation updateUser($street: String, $houseNumber: Int, $city: String, $postcode
 `;
 
 const CHANGE_EMAIL = gql`
-mutation updateUser($email: String, $userId: String!){
-  updateUser(email: $email, userId: $userId){
+mutation updateUser($email: String, $currentPassword: String, $userId: String!){
+  updateUser(email: $email, currentPassword: $currentPassword, userId: $userId){
     ok
     statusCode
     infoText
@@ -73,23 +41,15 @@ mutation updateUser($email: String, $userId: String!){
 
 export function Profile() {
   const navigate = useNavigate();
-  const location = useLocation();
   const loginStatus = useLoginStatus();
   const [logoutMutation] = useLogout();
-  const { email } = location.state || {};
   const [isModalOpen, setModalOpen] = useState(false);
-  const [isRoleModalOpen, setRoleModalOpen] = useState(false);
   const [isPasswordModalOpen, setPasswordModalOpen] = useState(false);
   const [editField, setEditField] = useState<"email" | "address" | null>(null);
   const [newEmail, setNewEmail] = useState("");
-  const [newAddress, setNewAddress] = useState("");
-  const [roleEmail, setRoleEmail] = useState("");
-  const [selectedRole, setSelectedRole] = useState("User");
   const setLoginAction = useLoginStatusDispatcher();
-  const [updateUserRightsMutation] = useUpdateUserRights();
-  const [changeUserRights] = useMutation(CHANGE_RIGHTS);
   const [changePassword] = useMutation(CHANGE_PASSWORD);
-  const [getUserID] = useMutation(CHANGE_PASSWORD);
+  const [currentPassword, setCurrentPassword] = useState('');
   const [password, setPassword] = useState('');
   const [repeatPassword, setRepeatPassword] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
@@ -133,7 +93,7 @@ export function Profile() {
         setHouseNumber('');
         setPostcode('');
       } else {
-        setErrorMessage(data?.updateUser?.message || 'Adressänderung fehlgeschlagen.');
+        setErrorMessage(data?.updateUser?.infoText || 'Adressänderung fehlgeschlagen.');
       }
     } catch (error) {
       setErrorMessage('Fehler bei der Adressänderung. Bitte versuche es später erneut.');
@@ -142,7 +102,7 @@ export function Profile() {
 
   const handleEmailChange = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!newEmail) {
+    if (!newEmail || !currentPassword) {
       setErrorMessage('Alle Felder müssen ausgefüllt werden!');
       return;
     }
@@ -151,10 +111,11 @@ export function Profile() {
     }
     const id = loginStatus.user.id;
     try {
-      const { data } = await changeAdress({
+      const { data } = await changeEmail({
         variables: {
           userId: id,
-          email: newEmail
+          email: newEmail,
+          currentPassword: currentPassword
         }
       });
 
@@ -163,8 +124,9 @@ export function Profile() {
         alert('Email erfolgreich geändert!');
         setModalOpen(false);
         setNewEmail('');
+        setCurrentPassword('');
       } else {
-        setErrorMessage(data?.updateUser?.message || 'Änderung der E-Mail fehlgeschlagen.');
+        setErrorMessage(data?.updateUser?.infoText || 'Änderung der E-Mail fehlgeschlagen.');
       }
     } catch (error) {
       setErrorMessage('Fehler bei der Änderung der E-Mail. Bitte versuche es später erneut.');
@@ -173,8 +135,12 @@ export function Profile() {
 
   const handlePasswordChange = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!password || !repeatPassword) {
+    if (!currentPassword || !password || !repeatPassword) {
       setErrorMessage('Alle Felder müssen ausgefüllt werden!');
+      return;
+    }
+    if (password.length < 10) {
+      setErrorMessage('Das Passwort muss mindestens 10 Zeichen lang sein');
       return;
     }
 
@@ -186,12 +152,12 @@ export function Profile() {
       return;
     }
     const id = loginStatus.user.id;
-    console.log(loginStatus.user.id);
     try {
       const { data } = await changePassword({
         variables: {
           userId: id,
-          password: password
+          password: password,
+          currentPassword: currentPassword
         }
       });
 
@@ -199,102 +165,22 @@ export function Profile() {
         setErrorMessage('');
         alert('Passwortänderung erfolgreich!');
         setPasswordModalOpen(false);
+        setCurrentPassword('');
+        setPassword('');
+        setRepeatPassword('');
       } else {
-        setErrorMessage(data?.updateUser?.message || 'Passwortänderung fehlgeschlagen!');
+        setErrorMessage(data?.updateUser?.infoText || 'Passwortänderung fehlgeschlagen!');
       }
     } catch (error) {
       setErrorMessage('Fehler bei der Passwortänderung. Bitte versuche es später erneut.');
     }
   };
 
-  const handleRightsChange = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!roleEmail) {
-      alert('Alle Felder müssen ausgefüllt werden!');
-      return;
-    }
-    try {
-      console.log(roleEmail);
-      const { data: userData } = await getUserID({
-        variables: { roleEmail },
-      });
-      console.log("userd: "+userData);
-
-      if (!userData?.filterUsers?.userId) {
-        alert("Benutzer-ID konnte nicht gefunden werden.");
-        return;
-      }
-
-    const userId = userData.filterUsers.userId;
-    console.log("stev");
-    console.log(userId);
-    
-      const { data } = await changeUserRights({
-        variables: {
-          userId: userId,
-          newRights: selectedRole,
-          organization: "69590f30-0959-406d-a9b5-3fefbda28fb4"
-        }
-      });
-      console.log("userId");
-
-      if (data?.updateUserRights?.ok) {
-        alert(`Rolle "${selectedRole}" erfolgreich zugewiesen!`);
-      } else {
-        alert(`Fehler: ${data?.updateUserRights?.infoText || "Unbekannter Fehler"}`);
-      }
-    } catch (error) {
-      console.error("Error assigning role:", error);
-      alert("Fehler beim Zuweisen der Rolle.: ");
-    }
-  
-    setRoleModalOpen(false);
-  };
-
-
-
   const handleLogout = () => {
     setLoginAction({ type: "logout" });
     localStorage.removeItem("authToken");
     console.log("User logged out");
     navigate("/");
-  };
-
-  const handleSave = () => {
-    setModalOpen(false);
-  };
-
-
-
-  const handleAssignRole = async () => {
-   // if (loading) return;
-
-
-    const organizationId = loginStatus.loggedIn
-    ? loginStatus.user?.organizationInfoList?.[0]?.id
-    : undefined;
-
-    try {
-      const response = await updateUserRightsMutation({
-        variables: {
-          email,
-          rights: [selectedRole],
-        },
-      });
-
-      if (response.success) {
-        console.log(`Role ${selectedRole} successfully assigned to ${roleEmail}`);
-        alert(`Rolle "${selectedRole}" erfolgreich zugewiesen!`);
-      } else {
-        console.error("Failed to assign role:", response);
-        alert(`Fehler: ${response.info}`);
-      }
-    } catch (error) {
-      console.error("Error assigning role:", error);
-      alert("Fehler beim Zuweisen der Rolle.");
-    }
-
-    setRoleModalOpen(false);
   };
 
   if (!loginStatus.loggedIn) {
@@ -354,6 +240,13 @@ export function Profile() {
                   placeholder={loginStatus.user?.email}
                   onChange={(e) => setNewEmail(e.target.value)} 
                 />
+                Aktuelles Passwort:
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                />
               </label>
             ) : (
               <label>
@@ -395,7 +288,7 @@ export function Profile() {
             {errorMessage && <p className="error-message">{errorMessage}</p>}
             <div className="modal-buttons">
               <button onClick={editField === "email" ? handleEmailChange : handleAdressChange}>Speichern</button>
-              <button onClick ={() => {setModalOpen(false); setErrorMessage("")}}>Abbrechen</button>
+              <button onClick ={() => {setModalOpen(false); setErrorMessage(""); setCurrentPassword("")}}>Abbrechen</button>
             </div>
           </div>
         </div>
@@ -405,6 +298,17 @@ export function Profile() {
                 <div className="modal222">
                 <div className="modal-content222">
                   <h3>Passwort ändern</h3>
+                  <label>
+                    Aktuelles Passwort:
+                    <input
+                      type="password"
+                      autoComplete="current-password"
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      placeholder="Aktuelles Passwort"
+                    />
+                  </label>
+                  <br /><br />
                   <label>
                     Neues Passwort:
                     <input 
@@ -427,50 +331,11 @@ export function Profile() {
                   {errorMessage && <p className="error-message">{errorMessage}</p>}
             <div className="modal-buttons">
               <button onClick={handlePasswordChange}>Bestätigen</button>
-              <button onClick ={() => {setPasswordModalOpen(false); setErrorMessage("")}}>Abbrechen</button>
+              <button onClick ={() => {setPasswordModalOpen(false); setErrorMessage(""); setCurrentPassword("")}}>Abbrechen</button>
             </div>
       </div>      </div>
       )}
 
-      {isRoleModalOpen && (
-        <div className="modal222">
-          <div className="modal-content222">
-            <h3>Rechte zuweisen</h3>
-            <label>
-              E-Mail des Nutzers:
-              <input 
-                type="email" 
-                value={roleEmail} 
-                onChange={(e) => setRoleEmail(e.target.value)} 
-                placeholder= {loginStatus.user?.email}
-              />
-            </label>
-            <br /><br />
-            {errorMessage && <p className="error-message">{errorMessage}</p>}
-            <br /><br />
-            <div className="modal-buttons">
-              <button onClick={handlePasswordChange}>Bestätigen</button>
-              <button onClick={() => setPasswordModalOpen(false)}>Abbrechen</button>
-            </div>
-
-            <label>
-  Rolle:
-  <select value={selectedRole} onChange={(e) => setSelectedRole(e.target.value)}>
-    <option value="organization_admin">Organisations-Admin</option>
-    <option value="inventory_admin">Inventar-Admin</option>
-    <option value="member">Mitglied</option>
-    <option value="customer">Kunde</option>
-    <option value="watcher">Beobachter</option>
-  </select>
-</label>
-            <br />
-            <div className="modal-buttons">
-              <button onClick={handleRightsChange}>Bestätigen</button>
-              <button onClick={() => setRoleModalOpen(false)}>Abbrechen</button>
-            </div>
-          </div>
-        </div>
-      )}
       <Orders />
     </div>
   );
