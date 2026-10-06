@@ -37,30 +37,45 @@ def set_password(email):
 
 def reset_link(email):
     if not public_base_url:
-        sys.exit("public_base_url is not set; set it in backend.env or use set-password")
+        sys.exit("public_base_url is not set; "
+                 "set it in backend.env or use set-password")
     user = _user_or_exit(email)
     print(password_reset.issue_link(user))
-    print("Valid for 1 hour, single use. Send it to the user over a trusted channel.", file=sys.stderr)
+    print("Valid for 1 hour, single use. "
+          "Send it to the user over a trusted channel.", file=sys.stderr)
 
 
 def seed_demo(force_dev):
     if not (testing_on or force_dev):
-        sys.exit("seed-demo loads demo users with a published password. It only runs with "
-                 "testing_on=1 or --force-dev, never on a production database.")
+        sys.exit("seed-demo loads demo users with a published password. "
+                 "It only runs with testing_on=1 or --force-dev, "
+                 "never on a production database.")
     import seed_demo as demo
+    if demo.foreign_users():
+        sys.exit("seed-demo refuses to run: the database contains users "
+                 "other than root and the demo users.")
     created = demo.seed()
-    summary = ", ".join(f"{count} {kind}" for kind, count in sorted(created.items())) or "nothing new"
-    print(f"Demo data loaded ({summary}). Password of all demo users: {demo.DEMO_PASSWORD}")
+    summary = ", ".join(f"{count} {kind}"
+                        for kind, count in sorted(created.items()))
+    print(f"Demo data loaded ({summary or 'nothing new'}). "
+          f"Password of all demo users: {demo.DEMO_PASSWORD}")
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="LendingSystem operator commands")
+    parser = argparse.ArgumentParser(
+        description="LendingSystem operator commands")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("set-password", help="set a user's password interactively").add_argument("email")
-    commands.add_parser("reset-link", help="print a one-hour password reset link").add_argument("email")
-    seed = commands.add_parser("seed-demo", help="load Harry Potter demo data (development only)")
-    seed.add_argument("--force-dev", action="store_true",
-                      help="allow seeding without testing_on (development databases only)")
+    commands.add_parser(
+        "set-password",
+        help="set a user's password interactively").add_argument("email")
+    commands.add_parser(
+        "reset-link",
+        help="print a one-hour password reset link").add_argument("email")
+    seed = commands.add_parser(
+        "seed-demo", help="load Harry Potter demo data (development only)")
+    seed.add_argument(
+        "--force-dev", action="store_true",
+        help="allow seeding without testing_on (development databases only)")
     args = parser.parse_args(argv)
 
     if args.command == "set-password":

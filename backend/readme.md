@@ -173,7 +173,8 @@ users for every role, items with tags and groups, and orders in different states
 and the catalogue show booked and lent-out items. Dates are relative to the day of seeding.
 
 The command only runs with `testing_on=1` or `--force-dev`, because every demo user has the same
-published password. Never run it against a production database. It is idempotent: a second run
+published password. Never run it against a production database. It also refuses to run when the
+database contains users other than the root user and the demo users. It is idempotent: a second run
 adds nothing and does not change existing passwords.
 
 ```bash

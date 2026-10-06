@@ -79,6 +79,17 @@ class SeedDemoTestCase(unittest.TestCase):
             self.run_cli("--force-dev")
         self.assertEqual(db.query(PhysicalObject).count(), len(seed_demo.ITEMS))
 
+    def test_refuses_database_with_other_users(self):
+        db.add(User(first_name="Real", last_name="User", email="real.user@ovgu.de",
+                    password_hash="x"))
+        db.commit()
+        with mock.patch.object(manage, "testing_on", 0), self.assertRaises(SystemExit):
+            self.run_cli("--force-dev")
+        with self.assertRaises(SystemExit):
+            self.run_cli()
+        self.assertEqual(db.query(PhysicalObject).count(), 0)
+        self.assertEqual(db.query(User).count(), 2)  # root + the existing user
+
     def test_every_role_is_covered_and_can_log_in(self):
         self.run_cli()
         rights = {m.rights.name for m in db.query(Organization_User).all()}
