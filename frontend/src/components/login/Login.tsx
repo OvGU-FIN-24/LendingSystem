@@ -46,9 +46,9 @@ const REGISTER_MUTATION = gql`
   }
 `;
 
-const RESET_PASSWORD = gql`
-mutation resetPassword($email: String!) {
-  resetPassword(email: $email) {
+const REQUEST_PASSWORD_RESET = gql`
+mutation requestPasswordReset($email: String!) {
+  requestPasswordReset(email: $email) {
     ok
     infoText
     statusCode
@@ -73,12 +73,9 @@ export function Login(props: LoginProps) {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
-  const [isLoginModalVisible, setLoginModalVisible] = useState(false);
   const [registerUser] = useMutation(REGISTER_MUTATION);
   const [isForgotPassword, setIsForgotPassword] = useState(false);
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmNewPassword, setConfirmNewPassword] = useState('');
-  const [resetPassword] = useMutation(RESET_PASSWORD);
+  const [requestPasswordReset] = useMutation(REQUEST_PASSWORD_RESET);
 
 
 
@@ -107,18 +104,18 @@ export function Login(props: LoginProps) {
   const handleResetPassword = async (event: React.FormEvent) => {
     event.preventDefault();
     try {
-      const { data } = await resetPassword({
+      const { data } = await requestPasswordReset({
         variables: {
           email: email,
         }
       });
   
-      if (data?.resetPassword?.ok) {
+      if (data?.requestPasswordReset?.ok) {
         setErrorMessage('');
-        alert('Email versendet!');
+        alert(data.requestPasswordReset.infoText || 'Wenn ein Konto existiert, wurde eine E-Mail versendet.');
         props.onClose();
       } else {
-        setErrorMessage(data?.login?.infoText || 'Fehler bei der Anfrage!');
+        setErrorMessage(data?.requestPasswordReset?.infoText || 'Fehler bei der Anfrage!');
       }
     } catch (error) {
       setErrorMessage('Fehler bei der Anfrage. Bitte versuche es später erneut.');
@@ -139,6 +136,10 @@ export function Login(props: LoginProps) {
 
     if (password !== repeatPassword) {
       setErrorMessage('Die Passwörter stimmen nicht überein!');
+      return;
+    }
+    if (password.length < 10) {
+      setErrorMessage('Das Passwort muss mindestens 10 Zeichen lang sein');
       return;
     }
 
@@ -165,7 +166,7 @@ export function Login(props: LoginProps) {
         setIsLogin(true);
         setPassword('');
       } else {
-        setErrorMessage(data?.updateUser?.message || 'Registrierung fehlgeschlagen.');
+        setErrorMessage(data?.createUser?.infoText || 'Registrierung fehlgeschlagen.');
       }
     } catch (error) {
       setErrorMessage('Fehler bei der Registrierung. Bitte versuche es später erneut.');
@@ -257,8 +258,8 @@ export function Login(props: LoginProps) {
           <div className="modal-content2222">
           <h3 style={{textAlign: "center", marginTop: "60px"}}>{"Passwort vergessen"}</h3>            
           <p style={{ marginBottom: "20px", textAlign: "center", color: "#555" }}>
-      Nach Abschluss des Vorgangs wird Ihnen eine E-Mail mit einem neuen Kennwort zugesandt, 
-      mit dem Sie sich anmelden können. Bitte ändern Sie Ihr Passwort danach in den Nutzereinstellungen.
+      Wenn ein Konto mit dieser E-Mail-Adresse existiert, erhalten Sie eine E-Mail mit einem Link,
+      über den Sie ein neues Passwort festlegen können. Der Link ist eine Stunde gültig.
     </p>
 
     <label style={{ marginTop: "40px", display: "block" }}>

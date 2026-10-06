@@ -6,6 +6,7 @@ import { Cart } from "../cart/Cart";
 import { AddInventory } from "../add-inventory/AddInventory";
 import { EditInventory } from "../edit-inventory/EditInventory";
 import { Login } from "../login/Login";
+import { ResetPassword } from "../login/ResetPassword";
 import { Requests } from "../requests/Requests";
 import { InternalInventory } from "../internal-inventory/InternalInventory";
 import { AddGroup } from "../add-group/AddGroup";
@@ -49,6 +50,7 @@ export function Router() {
             </Route>
 
             <Route path='login' element={<Login onClose={() => {}}/>}/>
+            <Route path='reset-password' element={<ResetPassword />}/>
             <Route path='requests' element={<Requests />}/>
 
             <Route path='requests'>
