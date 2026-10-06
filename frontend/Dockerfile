@@ -12,6 +12,7 @@ ENV GENERATE_SOURCEMAP=false
 # No inline runtime script in index.html, so the Content-Security-Policy can forbid inline scripts
 ENV INLINE_RUNTIME_CHUNK=false
 # Serve the PDF.js worker from the same origin, matching the installed pdfjs-dist version
+# (3.x: @react-pdf-viewer 3.12 does not support pdfjs-dist 4; see src/utils/pdf.ts)
 RUN cp node_modules/pdfjs-dist/build/pdf.worker.min.js public/ \
     && npm run build
 

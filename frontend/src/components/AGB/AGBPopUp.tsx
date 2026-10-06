@@ -3,6 +3,7 @@ import './../../core/input/Buttons/ButtonStyle.css';
 import { useState, useEffect, useRef } from 'react';
 import '../cart/OrderPopup.css';
 import { Worker, Viewer } from '@react-pdf-viewer/core';
+import { safePdfParams } from '../../utils/pdf';
 import { zoomPlugin, RenderZoomInProps, RenderZoomOutProps } from '@react-pdf-viewer/zoom';
 import '@react-pdf-viewer/core/lib/styles/index.css';
 import '@react-pdf-viewer/default-layout/lib/styles/index.css';
@@ -143,7 +144,7 @@ export default function AGBPopUp(props : AGBPopUpProbs){
                         { org.agb!="" &&
                           <div>
                             <Worker workerUrl='/pdf.worker.min.js'>
-                                <Viewer fileUrl={process.env.REACT_APP_PDFS_BASE_URL+org.agb}  plugins={[zoomPluginInstance]}/>
+                                <Viewer fileUrl={process.env.REACT_APP_PDFS_BASE_URL+org.agb}  plugins={[zoomPluginInstance]} transformGetDocumentParams={safePdfParams}/>
                             </Worker>
                             <div style={{ marginTop: '10px' }}>
                                     <input
