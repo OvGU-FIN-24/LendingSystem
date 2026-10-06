@@ -5,21 +5,23 @@ import ssl
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from smtplib import (SMTPAuthenticationError, SMTPConnectError, SMTPException, SMTPRecipientsRefused,
+                     SMTPResponseException, SMTPServerDisconnected)
 
 from config import use_ssl, mail_server_address, mail_server_port, sender_email_address, sender_email_password, scheduler, timezone
 
 log = logging.getLogger("lending")
 
 # Errors worth retrying later; everything else is permanent and dropped.
-TRANSIENT = (smtplib.SMTPServerDisconnected, smtplib.SMTPConnectError, socket.timeout, TimeoutError, ConnectionError)
+TRANSIENT = (SMTPServerDisconnected, SMTPConnectError, socket.timeout, TimeoutError, ConnectionError)
 # Delay in minutes before retry 1, 2 and 3; no further retries after that.
 BACKOFF_MIN = [5, 15, 60]
 
 
 def _is_transient(error):
-    if isinstance(error, (smtplib.SMTPRecipientsRefused, smtplib.SMTPAuthenticationError)):
+    if isinstance(error, (SMTPRecipientsRefused, SMTPAuthenticationError)):
         return False
-    if isinstance(error, smtplib.SMTPResponseException):
+    if isinstance(error, SMTPResponseException):
         return 400 <= error.smtp_code < 500
     return isinstance(error, TRANSIENT)
 
@@ -45,7 +47,7 @@ def _deliver(receiver, subject, body):
     finally:
         try:
             mail_server.quit()
-        except smtplib.SMTPException:
+        except SMTPException:
             pass
 
 
