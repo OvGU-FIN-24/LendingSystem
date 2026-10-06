@@ -7,18 +7,34 @@ map $http_x_forwarded_proto $fwd_proto {
     ""      $scheme;
 }
 
+# GraphQL POST bodies: only JSON and multipart (file upload); other types (e.g. HTML form posts) get 415
+map "$request_method:$content_type" $api_bad_content_type {
+    "~*^POST:(application/json|multipart/form-data)\s*(;|$)" 0;
+    "~^POST:"                                                1;
+    default                                                  0;
+}
+
 # SVG pictures open as a download, never as a document on this origin (<img> still shows them)
 map $uri $picture_disposition {
     "~*\.svgz?$" "attachment";
     default       "";
 }
 
+# API requests per client IP (behind a proxy: the client from X-Forwarded-For, see TRUSTED_PROXY_CIDR).
+# Login and password reset share the GraphQL endpoint, so they cannot get a separate, stricter zone here.
+limit_req_zone $binary_remote_addr zone=api:10m rate=5r/s;
+limit_req_status 429;
+
 server {
     listen 8080;
     listen [::]:8080;
 
     server_tokens off;
-    client_max_body_size 100m;
+    # Large bodies only for /api/ (uploads)
+    client_max_body_size 1m;
+    client_header_timeout 15s;
+    client_body_timeout 30s;
+    send_timeout 30s;
 
     # Client IP from the trusted upstream proxy
     set_real_ip_from ${TRUSTED_PROXY_CIDR};
@@ -48,12 +64,20 @@ server {
 
     # Backend
     location /api/ {
+        if ($api_bad_content_type) {
+            return 415;
+        }
+        limit_req zone=api burst=40 nodelay;
+        client_max_body_size 100m;
+
         proxy_pass http://backend:5000/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $fwd_proto;
-        proxy_read_timeout 120s;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 30s;
+        proxy_read_timeout 30s;
     }
 
     # Uploaded files are untrusted. The sandbox CSP stops scripts (e.g. inside an SVG) when a file is

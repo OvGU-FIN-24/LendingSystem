@@ -26,4 +26,6 @@ RUN useradd -u 10001 -U -M -d /backend app \
 USER 10001
 EXPOSE 5000
 
-CMD [ "gunicorn", "-w", "1", "--timeout", "120", "--access-logfile", "-", "-b", "0.0.0.0:5000", "app:app" ]
+# Exactly one worker process: APScheduler runs in every worker, so more workers would duplicate jobs and mails.
+# Threads let slow requests (e.g. uploads, expensive queries) not block everybody else.
+CMD [ "gunicorn", "-w", "1", "--threads", "4", "--timeout", "30", "--access-logfile", "-", "-b", "0.0.0.0:5000", "app:app" ]
