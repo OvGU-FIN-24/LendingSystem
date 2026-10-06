@@ -6,7 +6,7 @@ from models import *
 from schema_queries import Query
 from schema_mutations import Mutations
 import Tests.filter_tests as filter
-import Tests.mutations_tests as mutations
+import Tests.mutation_tests as mutations
 
 from Tests.db_test_setups import testDB_base
 
@@ -41,7 +41,7 @@ class Test(unittest.TestCase):
         filter.test_organization_filter(self.client, test_db)
 
     def test_mutation_create_user(self):
-        mutations.test_mutation_create_user(self.client, test_db)
+        mutations.test_create_user(self.client, test_db)
 
     def tearDown(self):
         # Drop all tables in the database
