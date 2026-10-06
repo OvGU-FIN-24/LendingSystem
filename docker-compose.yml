@@ -56,8 +56,6 @@ services:
     restart: unless-stopped
     logging: *logging
     <<: *hardening
-    tmpfs:
-      - /tmp
     mem_limit: 512m
     pids_limit: 256
     hostname: container
@@ -68,6 +66,8 @@ services:
       - pdf-files:/backend/pdfs
       - image-files:/backend/pictures
       - template-files:/backend/templates
+      # Upload temp files on disk, not in memory (anonymous volume; the root filesystem is read-only)
+      - /tmp
     env_file:
       - backend.env
     # Infrastructure settings; they override values from backend.env
@@ -101,8 +101,6 @@ services:
     <<: *hardening
     # The entrypoint renders the nginx config into conf.d at start
     tmpfs:
-      - /tmp
-      - /var/cache/nginx:uid=101,gid=101
       - /etc/nginx/conf.d:uid=101,gid=101
     mem_limit: 256m
     pids_limit: 256
@@ -116,6 +114,8 @@ services:
     volumes:
       - pdf-files:/var/www/html/pdfs:ro
       - image-files:/var/www/html/pictures:ro
+      # Request body and proxy temp files on disk, not in memory (anonymous volume)
+      - /tmp
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
       interval: 15s
