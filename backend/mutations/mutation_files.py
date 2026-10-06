@@ -118,11 +118,15 @@ class update_file(graphene.Mutation):
     ok          = graphene.Boolean()
     info_text   = graphene.String()
     status_code = graphene.Int()
-    upload_file = graphene.Int(description="Deprecated: same value as statusCode")
+    upload_file = graphene.Int(
+        description="Deprecated: same value as statusCode"
+    )
 
     @staticmethod
     def mutate(root, info, file_id, show_index=None):
-        result = update_file._mutate(root, info, file_id=file_id, show_index=show_index)
+        result = update_file._mutate(
+            root, info, file_id=file_id, show_index=show_index
+        )
         result.upload_file = result.status_code
         return result
 
@@ -139,7 +143,12 @@ class update_file(graphene.Mutation):
             db_file.show_index = show_index
 
         db.commit()
-        return update_file(ok=True, info_text="File updated successfully.", file=db_file, status_code=200)
+        return update_file(
+            ok=True,
+            info_text="File updated successfully.",
+            file=db_file,
+            status_code=200,
+        )
 
 
 class delete_file(graphene.Mutation):
@@ -163,11 +172,17 @@ class delete_file(graphene.Mutation):
             raise NotFound("File not found.")
         require_file_edit(db_file)
 
-        directory = picture_directory if db_file.file_type == FileModel.FileType.picture else pdf_directory
+        directory = (
+            picture_directory
+            if db_file.file_type == FileModel.FileType.picture
+            else pdf_directory
+        )
         path = os.path.join(directory, os.path.basename(db_file.path))
 
         db.delete(db_file)
         db.commit()
         if os.path.isfile(path):
             os.remove(path)
-        return delete_file(ok=True, info_text="File successfully removed.", status_code=200)
+        return delete_file(
+            ok=True, info_text="File successfully removed.", status_code=200
+        )

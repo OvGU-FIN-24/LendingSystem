@@ -1,7 +1,16 @@
 import graphene
 
-from authz import (guarded, require_user, require_right, require_files_linkable, require_linkable,
-                   clean_ids, org_of_phys, InvalidInput, NotFound)
+from authz import (
+    guarded,
+    require_user,
+    require_right,
+    require_files_linkable,
+    require_linkable,
+    clean_ids,
+    org_of_phys,
+    InvalidInput,
+    NotFound,
+)
 from config import db
 from models import userRights
 from schema import GroupModel, PhysicalObject, PhysicalObjectModel, TagModel
@@ -12,7 +21,11 @@ from schema import GroupModel, PhysicalObject, PhysicalObjectModel, TagModel
 
 def _tags(ids):
     ids = clean_ids(ids)
-    return db.query(TagModel).filter(TagModel.tag_id.in_(ids)).all() if ids else []
+    return (
+        db.query(TagModel).filter(TagModel.tag_id.in_(ids)).all()
+        if ids
+        else []
+    )
 
 
 class create_physical_object(graphene.Mutation):
@@ -50,12 +63,32 @@ class create_physical_object(graphene.Mutation):
 
     @staticmethod
     @guarded
-    def mutate(root, info, inv_num_internal, inv_num_external, borrowable, storage_location, deposit, storage_location2, name, organization_id,
-               tags=None, pictures=None, manual=None, orders=None, groups=None, faults=None, description=None,
-               lending_comment=None, return_comment=None):
+    def mutate(
+        root,
+        info,
+        inv_num_internal,
+        inv_num_external,
+        borrowable,
+        storage_location,
+        deposit,
+        storage_location2,
+        name,
+        organization_id,
+        tags=None,
+        pictures=None,
+        manual=None,
+        orders=None,
+        groups=None,
+        faults=None,
+        description=None,
+        lending_comment=None,
+        return_comment=None,
+    ):
         require_right(organization_id, userRights.inventory_admin)
         if clean_ids(orders):
-            raise InvalidInput("Neue Objekte können keinen Bestellungen zugeordnet werden.")
+            raise InvalidInput(
+                "Neue Objekte können keinen Bestellungen zugeordnet werden."
+            )
         db_pictures = require_files_linkable(pictures, organization_id)
         db_manual = require_files_linkable(manual, organization_id)
         db_groups = require_linkable(GroupModel, groups, organization_id)
@@ -85,7 +118,12 @@ class create_physical_object(graphene.Mutation):
 
         db.add(physical_object)
         db.commit()
-        return create_physical_object(ok=True, info_text="Objekt erfolgreich erstellt.", physical_object=physical_object, status_code=200)
+        return create_physical_object(
+            ok=True,
+            info_text="Objekt erfolgreich erstellt.",
+            physical_object=physical_object,
+            status_code=200,
+        )
 
 
 class update_physical_object(graphene.Mutation):
@@ -112,7 +150,11 @@ class update_physical_object(graphene.Mutation):
         pictures    = graphene.List(graphene.String, description="List of picture file ids; Override existing pictures")
         manual      = graphene.List(graphene.String, description="List of manual file ids; Override existing manual")
         tags        = graphene.List(graphene.String, description="List of tag ids; Override existing tags")
-        orders      = graphene.List(graphene.String, description="Not supported; orders are managed through order mutations")
+        orders = graphene.List(
+            graphene.String,
+            description="Not supported; orders are managed through "
+            "order mutations",
+        )
         groups      = graphene.List(graphene.String, description="List of group ids; Override existing groups")
 
     physical_object = graphene.Field(lambda: PhysicalObject)
@@ -122,11 +164,26 @@ class update_physical_object(graphene.Mutation):
 
     @staticmethod
     @guarded
-    def mutate(root, info, phys_id, inv_num_internal=None, inv_num_external=None, borrowable=None,
-               storage_location=None, storage_location2=None, name=None,
-               pictures=None, manual=None,
-               tags=None, orders=None, groups=None, faults=None, description=None, deposit=None,
-               organization_id=None):
+    def mutate(
+        root,
+        info,
+        phys_id,
+        inv_num_internal=None,
+        inv_num_external=None,
+        borrowable=None,
+        storage_location=None,
+        storage_location2=None,
+        name=None,
+        pictures=None,
+        manual=None,
+        tags=None,
+        orders=None,
+        groups=None,
+        faults=None,
+        description=None,
+        deposit=None,
+        organization_id=None,
+    ):
         org_id = org_of_phys(phys_id)
         require_right(org_id, userRights.inventory_admin)
         physical_object = db.query(PhysicalObjectModel).get(phys_id)
@@ -134,7 +191,9 @@ class update_physical_object(graphene.Mutation):
             raise NotFound("Objekt nicht gefunden.")
 
         if clean_ids(orders):
-            raise InvalidInput("Bestellungen können hier nicht geändert werden.")
+            raise InvalidInput(
+                "Bestellungen können hier nicht geändert werden."
+            )
         target_org = org_id
         if organization_id and organization_id != org_id:
             # moving an object requires inventory rights in both organisations
@@ -175,8 +234,12 @@ class update_physical_object(graphene.Mutation):
             physical_object.groups = db_groups
 
         db.commit()
-        return update_physical_object(ok=True, info_text="Objekt erfolgreich aktualisiert.",
-                                      physical_object=physical_object, status_code=200)
+        return update_physical_object(
+            ok=True,
+            info_text="Objekt erfolgreich aktualisiert.",
+            physical_object=physical_object,
+            status_code=200,
+        )
 
 
 class delete_physical_object(graphene.Mutation):
@@ -198,7 +261,9 @@ class delete_physical_object(graphene.Mutation):
         physical_object = db.query(PhysicalObjectModel).get(phys_id)
         db.delete(physical_object)
         db.commit()
-        return delete_physical_object(ok=True, info_text="Objekt erfolgreich entfernt.", status_code=200)
+        return delete_physical_object(
+            ok=True, info_text="Objekt erfolgreich entfernt.", status_code=200
+        )
 
 
 class is_physical_object_available(graphene.Mutation):
@@ -227,7 +292,10 @@ class is_physical_object_available(graphene.Mutation):
 
         for phys_order in physical_object.orders:
             order = phys_order.order
-            if order.from_date.date() <= end_date and order.till_date.date() >= start_date:
+            if (
+                order.from_date.date() <= end_date
+                and order.till_date.date() >= start_date
+            ):
                 return is_physical_object_available(ok=True, info_text="Objekt nicht verfügbar.", is_available=False, status_code=200)
 
         return is_physical_object_available(ok=True, info_text="Objekt verfügbar.", is_available=True, status_code=200)

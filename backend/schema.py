@@ -66,7 +66,11 @@ class Order(SQLAlchemyObjectType):
         v = viewer()
         if v.has(self.organization_id, userRights.inventory_admin):
             return list(self.users)
-        return [u for u in self.users if v.user_id is not None and u.user_id == v.user_id]
+        return [
+            u
+            for u in self.users
+            if v.user_id is not None and u.user_id == v.user_id
+        ]
 
 class User(SQLAlchemyObjectType):
     class Meta:
@@ -80,7 +84,11 @@ class User(SQLAlchemyObjectType):
     last_name   = graphene.String()
 
     def _field(self, name, level):
-        return getattr(self, name) if user_level(viewer(), self) >= level else None
+        return (
+            getattr(self, name)
+            if user_level(viewer(), self) >= level
+            else None
+        )
 
     def resolve_email(self, info):
         return User._field(self, 'email', LEVEL_CONTACT)

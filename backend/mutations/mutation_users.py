@@ -4,7 +4,14 @@ from flask import session
 import graphene
 from sqlalchemy import func
 
-from authz import guarded, require_user, bump_auth_epoch, reset_viewer, Forbidden, NotFound
+from authz import (
+    guarded,
+    require_user,
+    bump_auth_epoch,
+    reset_viewer,
+    Forbidden,
+    NotFound,
+)
 from config import db
 from schema import User, UserModel
 from validation import validate_email, validate_password
@@ -20,7 +27,16 @@ def _email_taken(email, except_user_id=None):
     return query.first() is not None
 
 
-def _set_optional_fields(user, country, city, postcode, street, house_number, phone_number, matricle_number):
+def _set_optional_fields(
+    user,
+    country,
+    city,
+    postcode,
+    street,
+    house_number,
+    phone_number,
+    matricle_number,
+):
     if country:
         user.country = country
     if city:
@@ -68,25 +84,60 @@ class create_user(graphene.Mutation):
 
     @staticmethod
     @guarded
-    def mutate(root, info, email, last_name, first_name, password, country=None, city=None, postcode=None, street=None, house_number=None, phone_number=None, matricle_number=None):
+    def mutate(
+        root,
+        info,
+        email,
+        last_name,
+        first_name,
+        password,
+        country=None,
+        city=None,
+        postcode=None,
+        street=None,
+        house_number=None,
+        phone_number=None,
+        matricle_number=None,
+    ):
         email = validate_email(email)
         validate_password(password)
 
         if _email_taken(email):
-            return create_user(ok=False, info_text=EMAIL_IN_USE, status_code=409)
+            return create_user(
+                ok=False, info_text=EMAIL_IN_USE, status_code=409
+            )
 
-        user = UserModel(first_name=first_name, last_name=last_name, email=email,
-                         password_hash=PasswordHasher().hash(password))
-        _set_optional_fields(user, country, city, postcode, street, house_number, phone_number, matricle_number)
+        user = UserModel(
+            first_name=first_name,
+            last_name=last_name,
+            email=email,
+            password_hash=PasswordHasher().hash(password),
+        )
+        _set_optional_fields(
+            user,
+            country,
+            city,
+            postcode,
+            street,
+            house_number,
+            phone_number,
+            matricle_number,
+        )
 
         db.add(user)
         db.commit()
-        return create_user(ok=True, info_text="Der Nutzer wurde erfolgreich angelegt.", user=user, status_code=200)
+        return create_user(
+            ok=True,
+            info_text="Der Nutzer wurde erfolgreich angelegt.",
+            user=user,
+            status_code=200,
+        )
 
 
 class update_user(graphene.Mutation):
     """
-    Updates content of the own user. Changing email or password requires current_password.
+    Updates content of the own user. Changing email or password requires
+    current_password.
     """
 
     class Arguments:
@@ -114,7 +165,23 @@ class update_user(graphene.Mutation):
 
     @staticmethod
     @guarded
-    def mutate(root, info, user_id, email=None, last_name=None, first_name=None, password=None, current_password=None, country=None, city=None, postcode=None, street=None, house_number=None, phone_number=None, matricle_number=None):
+    def mutate(
+        root,
+        info,
+        user_id,
+        email=None,
+        last_name=None,
+        first_name=None,
+        password=None,
+        current_password=None,
+        country=None,
+        city=None,
+        postcode=None,
+        street=None,
+        house_number=None,
+        phone_number=None,
+        matricle_number=None,
+    ):
         v = require_user()
         if v.user_id != user_id:
             raise Forbidden()
@@ -125,14 +192,18 @@ class update_user(graphene.Mutation):
 
         if email or password:
             try:
-                PasswordHasher().verify(user.password_hash, current_password or "")
+                PasswordHasher().verify(
+                    user.password_hash, current_password or ""
+                )
             except (VerificationError, InvalidHashError):
                 raise Forbidden(WRONG_PASSWORD)
 
         if email:
             email = validate_email(email)
             if _email_taken(email, except_user_id=user.user_id):
-                return update_user(ok=False, info_text=EMAIL_IN_USE, status_code=409)
+                return update_user(
+                    ok=False, info_text=EMAIL_IN_USE, status_code=409
+                )
             user.email = email
         if password:
             validate_password(password)
@@ -144,10 +215,24 @@ class update_user(graphene.Mutation):
             user.last_name = last_name
         if first_name:
             user.first_name = first_name
-        _set_optional_fields(user, country, city, postcode, street, house_number, phone_number, matricle_number)
+        _set_optional_fields(
+            user,
+            country,
+            city,
+            postcode,
+            street,
+            house_number,
+            phone_number,
+            matricle_number,
+        )
 
         db.commit()
-        return update_user(ok=True, info_text="User updated successfully", user=user, status_code=200)
+        return update_user(
+            ok=True,
+            info_text="User updated successfully",
+            user=user,
+            status_code=200,
+        )
 
 
 class delete_user(graphene.Mutation):
@@ -176,4 +261,6 @@ class delete_user(graphene.Mutation):
         db.commit()
         session.clear()
         reset_viewer()
-        return delete_user(ok=True, info_text="Nutzer erfolgreich entfernt.", status_code=200)
+        return delete_user(
+            ok=True, info_text="Nutzer erfolgreich entfernt.", status_code=200
+        )

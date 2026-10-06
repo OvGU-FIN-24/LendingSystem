@@ -10,9 +10,10 @@ from mutation_organizations import create_organization, update_organization, del
 from mutation_physical_objects import create_physical_object, update_physical_object, delete_physical_object, is_physical_object_available
 from mutation_tags import create_tag, update_tag, delete_tag
 from mutation_users import create_user, update_user, delete_user
-from mutation_password_reset import request_password_reset, confirm_password_reset
-
-
+from mutation_password_reset import (
+    request_password_reset,
+    confirm_password_reset,
+)
 
 class Mutations(graphene.ObjectType):
     login = login.Field()

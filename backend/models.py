@@ -61,7 +61,6 @@ class orderStatus(enum.Enum):
     returned = 6
 
 
-
 # m:n Relations go here ...
 
 physicalobject_tag = Table (
@@ -142,7 +141,6 @@ class PhysicalObject_Order(Base):
         return "Physical Object ID: " + str(self.phys_id) + "; Order ID: " + str(self.order_id) + "; Status: " + str(self.order_status) + "; Return Note: " + str(self.return_notes)
 
 
-
 # Classes go here ...
 
 class Tag(Base):
@@ -201,7 +199,9 @@ class File(Base):
         other   = 2
 
     __tablename__       = "file"
-    file_id             = Column(String(36),        primary_key = True, default=lambda: str(uuid.uuid4()))
+    file_id = Column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
     picture_id          = Column(String(36),       ForeignKey('physicalobject.phys_id'),        nullable = True)
     manual_id           = Column(String(36),       ForeignKey('physicalobject.phys_id'),        nullable = True)
     organization_id     = Column(String(36),       ForeignKey('organization.organization_id'),  nullable = True)
@@ -276,14 +276,23 @@ class User(Base):
     city                = Column(String(60),    unique = False, nullable = True)
     street              = Column(String(60),    unique = False, nullable = True)
     house_number        = Column(String(10),    unique = False, nullable = True)
-    
+
     phone_number        = Column(Integer, unique = True, nullable = True)
     matricle_number     = Column(Integer, unique = True, nullable = True)
 
     organizations       = relationship("Organization_User",                                back_populates = "user", cascade="all, delete-orphan")
     orders              = relationship("Order",             secondary = user_order,        back_populates = "users")
-    reset_tokens        = relationship("PasswordResetToken",                               back_populates = "user", cascade="all, delete-orphan")
-    auth_epoch          = relationship("UserAuthEpoch",     uselist = False,               back_populates = "user", cascade="all, delete-orphan")
+    reset_tokens = relationship(
+        "PasswordResetToken",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    auth_epoch = relationship(
+        "UserAuthEpoch",
+        uselist=False,
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self):
         return "User ID: " + str(self.user_id) + "; Name: " + self.first_name + " " + self.last_name
@@ -294,17 +303,20 @@ class PasswordResetToken(Base):
     """
     __tablename__       = "password_reset_token"
     token_hash          = Column(String(64),    primary_key = True)
-    user_id             = Column(String(36),    ForeignKey('user.user_id'), nullable = False, index = True)
+    user_id = Column(
+        String(36), ForeignKey('user.user_id'), nullable=False, index=True
+    )
     expires_at          = Column(DateTime,      nullable = False)   # naive UTC
 
     user                = relationship("User", back_populates = "reset_tokens")
 
 class UserAuthEpoch(Base):
     """
-    Per-user counter; sessions carrying an older epoch are invalid (password change)
+    Per-user counter; sessions carrying an older epoch are invalid
+    (password change)
     """
     __tablename__       = "user_auth_epoch"
-    user_id             = Column(String(36),    ForeignKey('user.user_id'), primary_key = True)
+    user_id = Column(String(36), ForeignKey('user.user_id'), primary_key=True)
     epoch               = Column(Integer,       nullable = False, default = 0)
 
     user                = relationship("User", back_populates = "auth_epoch")
@@ -429,4 +441,5 @@ class Organization(Base):
         return None
 
     def __repr__(self):
-        return "Organization ID: " + str(self.organization_id) + "; Name: " + self.name
+        return ("Organization ID: " + str(self.organization_id)
+                + "; Name: " + self.name)

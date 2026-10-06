@@ -30,12 +30,15 @@ class request_password_reset(graphene.Mutation):
             # an error must not reveal whether the account exists
             db.rollback()
             log.exception("password reset request failed")
-        return request_password_reset(ok=True, info_text=password_reset.REQUEST_INFO, status_code=200)
+        return request_password_reset(
+            ok=True, info_text=password_reset.REQUEST_INFO, status_code=200
+        )
 
 
 class confirm_password_reset(graphene.Mutation):
     """
-    Sets a new password with a token from a reset link and signs out all sessions of the user.
+    Sets a new password with a token from a reset link and signs out all
+    sessions of the user.
     """
 
     class Arguments:
@@ -50,4 +53,6 @@ class confirm_password_reset(graphene.Mutation):
     @guarded
     def mutate(root, info, token, new_password):
         password_reset.confirm_reset(token, new_password)
-        return confirm_password_reset(ok=True, info_text="Das Passwort wurde geändert.", status_code=200)
+        return confirm_password_reset(
+            ok=True, info_text="Das Passwort wurde geändert.", status_code=200
+        )

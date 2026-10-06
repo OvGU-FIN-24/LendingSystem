@@ -1,17 +1,27 @@
 import graphene
 
-from authz import guarded, require_user, require_staff_anywhere, require_tag_edit, clean_ids, Forbidden
+from authz import (
+    guarded,
+    require_user,
+    require_staff_anywhere,
+    require_tag_edit,
+    clean_ids,
+    Forbidden,
+)
 from config import db
 from models import userRights
 from schema import GroupModel, PhysicalObjectModel, Tag, TagModel
 
 
 def _linkable_for_tag(v, model, ids):
-    """Every referenced object or group must exist and the caller needs IA+ in its org."""
+    """Every referenced object or group must exist and the caller needs IA+ in
+    its org."""
     objs = []
     for ident in clean_ids(ids):
         obj = db.query(model).get(ident)
-        if obj is None or not v.has(obj.organization_id, userRights.inventory_admin):
+        if obj is None or not v.has(
+            obj.organization_id, userRights.inventory_admin
+        ):
             raise Forbidden()
         objs.append(obj)
     return objs
@@ -41,7 +51,9 @@ class create_tag(graphene.Mutation):
     @guarded
     def mutate(root, info, name, physicalobjects=None, groups=None):
         v = require_staff_anywhere()
-        db_physicalobjects = _linkable_for_tag(v, PhysicalObjectModel, physicalobjects)
+        db_physicalobjects = _linkable_for_tag(
+            v, PhysicalObjectModel, physicalobjects
+        )
         db_groups = _linkable_for_tag(v, GroupModel, groups)
 
         tag = TagModel(name=name)
@@ -52,7 +64,12 @@ class create_tag(graphene.Mutation):
 
         db.add(tag)
         db.commit()
-        return create_tag(ok=True, info_text="Tag erfolgreich erstellt.", tag=tag, status_code=200)
+        return create_tag(
+            ok=True,
+            info_text="Tag erfolgreich erstellt.",
+            tag=tag,
+            status_code=200,
+        )
 
 
 class update_tag(graphene.Mutation):
@@ -75,10 +92,14 @@ class update_tag(graphene.Mutation):
 
     @staticmethod
     @guarded
-    def mutate(root, info, tag_id, name=None, physicalobjects=None, groups=None):
+    def mutate(
+        root, info, tag_id, name=None, physicalobjects=None, groups=None
+    ):
         tag = require_tag_edit(tag_id)
         v = require_user()
-        db_physicalobjects = _linkable_for_tag(v, PhysicalObjectModel, physicalobjects)
+        db_physicalobjects = _linkable_for_tag(
+            v, PhysicalObjectModel, physicalobjects
+        )
         db_groups = _linkable_for_tag(v, GroupModel, groups)
 
         if db_physicalobjects:
@@ -89,7 +110,12 @@ class update_tag(graphene.Mutation):
             tag.name = name
 
         db.commit()
-        return update_tag(ok=True, info_text="Tag erfolgreich aktualisiert.", tag=tag, status_code=200)
+        return update_tag(
+            ok=True,
+            info_text="Tag erfolgreich aktualisiert.",
+            tag=tag,
+            status_code=200,
+        )
 
 
 class delete_tag(graphene.Mutation):
@@ -110,4 +136,6 @@ class delete_tag(graphene.Mutation):
         tag = require_tag_edit(tag_id)
         db.delete(tag)
         db.commit()
-        return delete_tag(ok=True, info_text="Tag erfolgreich entfernt.", status_code=200)
+        return delete_tag(
+            ok=True, info_text="Tag erfolgreich entfernt.", status_code=200
+        )

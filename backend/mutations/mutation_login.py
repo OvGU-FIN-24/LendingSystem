@@ -30,7 +30,9 @@ class login(graphene.Mutation):
     @staticmethod
     @guarded
     def mutate(root, info, email, password):
-        user = UserModel.query.filter(func.lower(UserModel.email) == (email or "").strip().lower()).first()
+        user = UserModel.query.filter(
+            func.lower(UserModel.email) == (email or "").strip().lower()
+        ).first()
 
         try:
             _ph.verify(user.password_hash if user else _DUMMY_HASH, password)
@@ -51,7 +53,11 @@ class login(graphene.Mutation):
         session['auth_epoch'] = epoch_row.epoch if epoch_row else 0
         current_app.session_interface.regenerate(session)
         reset_viewer()
-        return login(ok=True, info_text="Die Anmeldung war erfolgreich!", status_code=200)
+        return login(
+            ok=True,
+            info_text="Die Anmeldung war erfolgreich!",
+            status_code=200,
+        )
 
 class check_session(graphene.Mutation):
     ok          = graphene.Boolean()

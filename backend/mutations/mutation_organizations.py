@@ -1,15 +1,31 @@
 import graphene
 
-from authz import (guarded, require_user, require_sa, require_right, require_files_linkable,
-                   check_grant, parse_right, clean_ids, reset_viewer, ROOT_ORGANIZATION,
-                   Forbidden, NotFound, InvalidInput)
+from authz import (
+    guarded,
+    require_user,
+    require_sa,
+    require_right,
+    require_files_linkable,
+    check_grant,
+    parse_right,
+    clean_ids,
+    reset_viewer,
+    ROOT_ORGANIZATION,
+    Forbidden,
+    NotFound,
+    InvalidInput,
+)
 from config import db
 from models import userRights
 from schema import FileModel, Organization, OrganizationModel, Organization_User, Organization_UserModel, PhysicalObjectModel, UserModel
 
 
 def _get_organization(organization_id):
-    organization = db.query(OrganizationModel).get(organization_id) if organization_id else None
+    organization = (
+        db.query(OrganizationModel).get(organization_id)
+        if organization_id
+        else None
+    )
     if organization is None:
         raise NotFound("Organisation nicht gefunden.")
     return organization
@@ -24,11 +40,23 @@ def _get_user(user_id):
 
 def _root_users():
     """Global system admins (system_admin members of root_organization)."""
-    return (db.query(UserModel)
-            .join(Organization_UserModel, Organization_UserModel.user_id == UserModel.user_id)
-            .join(OrganizationModel, OrganizationModel.organization_id == Organization_UserModel.organization_id)
-            .filter(OrganizationModel.name == ROOT_ORGANIZATION,
-                    Organization_UserModel.rights == userRights.system_admin).all())
+    return (
+        db.query(UserModel)
+        .join(
+            Organization_UserModel,
+            Organization_UserModel.user_id == UserModel.user_id,
+        )
+        .join(
+            OrganizationModel,
+            OrganizationModel.organization_id
+            == Organization_UserModel.organization_id,
+        )
+        .filter(
+            OrganizationModel.name == ROOT_ORGANIZATION,
+            Organization_UserModel.rights == userRights.system_admin,
+        )
+        .all()
+    )
 
 
 ##################################
@@ -57,7 +85,9 @@ class create_organization(graphene.Mutation):
 
     @staticmethod
     @guarded
-    def mutate(root, info, name, location, users=None, physicalobjects=None, agb=None):
+    def mutate(
+        root, info, name, location, users=None, physicalobjects=None, agb=None
+    ):
         v = require_sa()
 
         organization = OrganizationModel(name=name, location=location)
@@ -77,22 +107,46 @@ class create_organization(graphene.Mutation):
         # global system admins get system_admin, listed users customer
         member_ids = set()
         for root_user in _root_users():
-            db.add(Organization_UserModel(user_id=root_user.user_id, organization_id=organization.organization_id,
-                                          rights=userRights.system_admin))
+            db.add(
+                Organization_UserModel(
+                    user_id=root_user.user_id,
+                    organization_id=organization.organization_id,
+                    rights=userRights.system_admin,
+                )
+            )
             member_ids.add(root_user.user_id)
         if v.user_id not in member_ids:
-            db.add(Organization_UserModel(user_id=v.user_id, organization_id=organization.organization_id,
-                                          rights=userRights.organization_admin))
+            db.add(
+                Organization_UserModel(
+                    user_id=v.user_id,
+                    organization_id=organization.organization_id,
+                    rights=userRights.organization_admin,
+                )
+            )
             member_ids.add(v.user_id)
-        for user in db.query(UserModel).filter(UserModel.user_id.in_(clean_ids(users))).all():
+        for user in (
+            db.query(UserModel)
+            .filter(UserModel.user_id.in_(clean_ids(users)))
+            .all()
+        ):
             if user.user_id not in member_ids:
-                db.add(Organization_UserModel(user_id=user.user_id, organization_id=organization.organization_id,
-                                              rights=userRights.customer))
+                db.add(
+                    Organization_UserModel(
+                        user_id=user.user_id,
+                        organization_id=organization.organization_id,
+                        rights=userRights.customer,
+                    )
+                )
                 member_ids.add(user.user_id)
 
         db.commit()
         reset_viewer()
-        return create_organization(ok=True, info_text="Organisation erfolgreich erstellt.", organization=organization, status_code=200)
+        return create_organization(
+            ok=True,
+            info_text="Organisation erfolgreich erstellt.",
+            organization=organization,
+            status_code=200,
+        )
 
 
 class update_organization(graphene.Mutation):
@@ -118,7 +172,15 @@ class update_organization(graphene.Mutation):
 
     @staticmethod
     @guarded
-    def mutate(root, info, organization_id=None, name=None, location=None, physicalobjects=None, agb=None):
+    def mutate(
+        root,
+        info,
+        organization_id=None,
+        name=None,
+        location=None,
+        physicalobjects=None,
+        agb=None,
+    ):
         require_right(organization_id, userRights.organization_admin)
         organization = _get_organization(organization_id)
 
@@ -144,7 +206,12 @@ class update_organization(graphene.Mutation):
             organization.agb = db_agb
 
         db.commit()
-        return update_organization(ok=True, info_text="Organisation erfolgreich aktualisiert.", organization=organization, status_code=200)
+        return update_organization(
+            ok=True,
+            info_text="Organisation erfolgreich aktualisiert.",
+            organization=organization,
+            status_code=200,
+        )
 
 
 class add_user_to_organization(graphene.Mutation):
@@ -171,13 +238,25 @@ class add_user_to_organization(graphene.Mutation):
         _get_organization(organization_id)
         _get_user(user_id)
 
-        if db.query(Organization_UserModel).get((organization_id, user_id)) is not None:
-            raise InvalidInput("Der Benutzer ist bereits Mitglied der Organisation.")
+        if (
+            db.query(Organization_UserModel).get((organization_id, user_id))
+            is not None
+        ):
+            raise InvalidInput(
+                "Der Benutzer ist bereits Mitglied der Organisation."
+            )
 
-        organization_user = Organization_UserModel(user_id=user_id, organization_id=organization_id, rights=right)
+        organization_user = Organization_UserModel(
+            user_id=user_id, organization_id=organization_id, rights=right
+        )
         db.add(organization_user)
         db.commit()
-        return add_user_to_organization(ok=True, info_text="User erfolgreich zur Organisation hinzugefügt.", organization_user=[organization_user], status_code=200)
+        return add_user_to_organization(
+            ok=True,
+            info_text="User erfolgreich zur Organisation hinzugefügt.",
+            organization_user=[organization_user],
+            status_code=200,
+        )
 
 
 class remove_user_from_organization(graphene.Mutation):
@@ -201,17 +280,25 @@ class remove_user_from_organization(graphene.Mutation):
         check_grant(v, organization_id, user_id)
         organization = _get_organization(organization_id)
 
-        membership = db.query(Organization_UserModel).get((organization_id, user_id))
+        membership = db.query(Organization_UserModel).get(
+            (organization_id, user_id)
+        )
         if membership is None:
             raise NotFound("Der Benutzer ist kein Mitglied der Organisation.")
         db.delete(membership)
         db.commit()
-        return remove_user_from_organization(ok=True, info_text="User erfolgreich aus der Organisation entfernt.", organization=organization, status_code=200)
+        return remove_user_from_organization(
+            ok=True,
+            info_text="User erfolgreich aus der Organisation entfernt.",
+            organization=organization,
+            status_code=200,
+        )
 
 
 class update_user_rights(graphene.Mutation):
     """
-    Updates the rights for the given user in the organization (adds the user if not a member).
+    Updates the rights for the given user in the organization (adds the user if
+    not a member).
     """
 
     class Arguments:
@@ -233,14 +320,27 @@ class update_user_rights(graphene.Mutation):
         organization = _get_organization(organization_id)
         _get_user(user_id)
 
-        membership = db.query(Organization_UserModel).get((organization_id, user_id))
+        membership = db.query(Organization_UserModel).get(
+            (organization_id, user_id)
+        )
         if membership is None:
-            db.add(Organization_UserModel(user_id=user_id, organization_id=organization_id, rights=right))
+            db.add(
+                Organization_UserModel(
+                    user_id=user_id,
+                    organization_id=organization_id,
+                    rights=right,
+                )
+            )
         else:
             membership.rights = right
 
         db.commit()
-        return update_user_rights(ok=True, info_text="Rechte erfolgreich aktualisiert.", organization=organization, status_code=200)
+        return update_user_rights(
+            ok=True,
+            info_text="Rechte erfolgreich aktualisiert.",
+            organization=organization,
+            status_code=200,
+        )
 
 
 class get_max_deposit(graphene.Mutation):
@@ -262,16 +362,25 @@ class get_max_deposit(graphene.Mutation):
     def mutate(root, info, organization_id, user_right):
         v = require_user()
         right = parse_right(user_right)
-        organization = db.query(OrganizationModel).get(organization_id) if organization_id else None
+        organization = (
+            db.query(OrganizationModel).get(organization_id)
+            if organization_id
+            else None
+        )
         if organization is None:
             raise Forbidden()
-        # staff may read every limit; everyone else only the limit for their own right
+        # staff may read every limit; everyone else only the limit for their own
+        # right
         if not v.has(organization_id, userRights.inventory_admin):
             own_right = v.right_in(organization_id) or userRights.customer
             if right != own_right:
                 raise Forbidden()
-        return get_max_deposit(ok=True, info_text="Max Deposit erfolgreich abgefragt.",
-                               max_deposit=organization.get_max_deposit(right), status_code=200)
+        return get_max_deposit(
+            ok=True,
+            info_text="Max Deposit erfolgreich abgefragt.",
+            max_deposit=organization.get_max_deposit(right),
+            status_code=200,
+        )
 
 
 class set_max_deposit(graphene.Mutation):
@@ -300,7 +409,11 @@ class set_max_deposit(graphene.Mutation):
             raise InvalidInput("Ungültiges Recht")
 
         db.commit()
-        return set_max_deposit(ok=True, info_text="Max Deposit erfolgreich gesetzt.", status_code=200)
+        return set_max_deposit(
+            ok=True,
+            info_text="Max Deposit erfolgreich gesetzt.",
+            status_code=200,
+        )
 
 
 class delete_organization(graphene.Mutation):
@@ -319,7 +432,11 @@ class delete_organization(graphene.Mutation):
     @guarded
     def mutate(root, info, organization_id):
         require_sa()
-        organization = db.query(OrganizationModel).get(organization_id) if organization_id else None
+        organization = (
+            db.query(OrganizationModel).get(organization_id)
+            if organization_id
+            else None
+        )
         if organization is None:
             raise NotFound("Organisation konnte nicht entfernt werden.")
         if organization.name == ROOT_ORGANIZATION:
@@ -328,4 +445,8 @@ class delete_organization(graphene.Mutation):
         db.delete(organization)
         db.commit()
         reset_viewer()
-        return delete_organization(ok=True, info_text="Organisation erfolgreich entfernt.", status_code=200)
+        return delete_organization(
+            ok=True,
+            info_text="Organisation erfolgreich entfernt.",
+            status_code=200,
+        )

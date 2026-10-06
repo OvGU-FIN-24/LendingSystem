@@ -60,7 +60,7 @@ if testing_on:
         os.makedirs(_d, exist_ok=True)
 
 # Mail
-mail_server_address     = None if testing_on else os.getenv('mail_server_address')
+mail_server_address = None if testing_on else os.getenv('mail_server_address')
 mail_server_port        = os.getenv('mail_server_port')
 use_ssl                 = os.getenv('use_ssl')
 sender_email_address    = os.getenv('sender_email_address')
@@ -70,9 +70,11 @@ sender_email_password   = os.getenv('sender_email_password')
 public_base_url = os.getenv('public_base_url', '').strip()
 
 # Allowed sign-up email domains (comma list); subdomains are allowed too
-allowed_email_domains = [d.strip().lower() for d in
-                         os.getenv('allowed_email_domains', 'ovgu.de').split(',')
-                         if d.strip()]
+allowed_email_domains = [
+    d.strip().lower()
+    for d in os.getenv('allowed_email_domains', 'ovgu.de').split(',')
+    if d.strip()
+]
 
 # Secret key
 secret_key = os.getenv("secret_key")

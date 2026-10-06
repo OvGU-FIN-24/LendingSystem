@@ -96,7 +96,8 @@ def render_mail(link):
 
 
 def request_reset(email):
-    """Sends a reset link if possible. Callers always answer with REQUEST_INFO."""
+    """Sends a reset link if possible. Callers always answer with
+    REQUEST_INFO."""
     user = find_user(email)
     if user is None:
         log.warning("Password reset requested for an unknown account")

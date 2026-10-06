@@ -21,7 +21,9 @@ from models import (userRights, orderStatus, User, UserAuthEpoch, Organization,
 log = logging.getLogger("lending")
 if not log.handlers:
     _handler = logging.StreamHandler(sys.stderr)
-    _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    _handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
     log.addHandler(_handler)
     log.setLevel(logging.INFO)
     log.propagate = False
@@ -106,11 +108,20 @@ def _current_epoch(user_id):
 
 
 def is_global_sa(user_id):
-    """Global system admin: system_admin membership in root_organization (only source)."""
-    row = (db.query(Organization_User)
-           .join(Organization, Organization.organization_id == Organization_User.organization_id)
-           .filter(Organization.name == ROOT_ORGANIZATION,
-                   Organization_User.user_id == user_id).first())
+    """Global system admin: system_admin membership in root_organization (only
+    source)."""
+    row = (
+        db.query(Organization_User)
+        .join(
+            Organization,
+            Organization.organization_id == Organization_User.organization_id,
+        )
+        .filter(
+            Organization.name == ROOT_ORGANIZATION,
+            Organization_User.user_id == user_id,
+        )
+        .first()
+    )
     return row is not None and row.rights == userRights.system_admin
 
 
@@ -122,8 +133,12 @@ def _compute_viewer():
     if user is None or session.get('auth_epoch', 0) != _current_epoch(user_id):
         session.clear()
         return ANONYMOUS
-    rights = {ou.organization_id: ou.rights for ou in
-              db.query(Organization_User).filter(Organization_User.user_id == user_id)}
+    rights = {
+        ou.organization_id: ou.rights
+        for ou in db.query(Organization_User).filter(
+            Organization_User.user_id == user_id
+        )
+    }
     return Viewer(user_id=user_id, rights=rights, is_sa=is_global_sa(user_id))
 
 
@@ -145,7 +160,8 @@ def reset_viewer():
 
 
 def bump_auth_epoch(user_id):
-    """Invalidate all sessions of the user. Does not commit; returns the new epoch."""
+    """Invalidate all sessions of the user. Does not commit; returns the new
+    epoch."""
     row = db.query(UserAuthEpoch).get(user_id)
     if row is None:
         row = UserAuthEpoch(user_id=user_id, epoch=0)
@@ -229,7 +245,9 @@ def org_of_file(file):
 
 
 def is_agb_file(file):
-    return bool(file.organization_id) and not (file.picture_id or file.manual_id or file.group_id)
+    return bool(file.organization_id) and not (
+        file.picture_id or file.manual_id or file.group_id
+    )
 
 
 def require_file_edit(file):
@@ -237,7 +255,11 @@ def require_file_edit(file):
     org_id = org_of_file(file)
     if org_id is None:
         return require_staff_anywhere()
-    required = userRights.organization_admin if is_agb_file(file) else userRights.inventory_admin
+    required = (
+        userRights.organization_admin
+        if is_agb_file(file)
+        else userRights.inventory_admin
+    )
     return require_right(org_id, required)
 
 
@@ -247,7 +269,8 @@ def orgs_of_tag(tag):
 
 
 def require_tag_edit(tag_id):
-    """Empty tag: SA only. Otherwise IA+ in every org using the tag. Returns the tag."""
+    """Empty tag: SA only. Otherwise IA+ in every org using the tag. Returns
+    the tag."""
     v = require_user()
     tag = _get_or_forbidden(Tag, tag_id)
     orgs = orgs_of_tag(tag)
@@ -264,12 +287,15 @@ def require_order_staff(order):
 
 
 def require_order_edit(order):
-    """Staff (IA+) of the order org in any status, or a borrower while all positions are pending."""
+    """Staff (IA+) of the order org in any status, or a borrower while all
+    positions are pending."""
     v = require_user()
     if v.has(order.organization_id, userRights.inventory_admin):
         return v
     is_borrower = any(u.user_id == v.user_id for u in order.users)
-    all_pending = all(po.order_status == orderStatus.pending for po in order.physicalobjects)
+    all_pending = all(
+        po.order_status == orderStatus.pending for po in order.physicalobjects
+    )
     if is_borrower and all_pending:
         return v
     raise Forbidden()
@@ -281,7 +307,8 @@ def clean_ids(ids):
 
 
 def require_linkable(model, ids, org_id):
-    """Each referenced entity exists and belongs to org_id. Returns the entities."""
+    """Each referenced entity exists and belongs to org_id. Returns the
+    entities."""
     objs = []
     for ident in clean_ids(ids):
         obj = _get_or_forbidden(model, ident)
@@ -292,7 +319,8 @@ def require_linkable(model, ids, org_id):
 
 
 def require_files_linkable(file_ids, org_id):
-    """Each file is unattached or already belongs to org_id. Returns the files."""
+    """Each file is unattached or already belongs to org_id. Returns the
+    files."""
     files = []
     for ident in clean_ids(file_ids):
         f = _get_or_forbidden(File, ident)
@@ -308,15 +336,19 @@ def check_grant(v, org_id, target_user_id, new_right=None):
     Bounds for granting rights:
     - system_admin is never grantable through the API (also not by SA)
     - SA may do everything else
-    - OA of the org may grant up to organization_admin, but only to targets whose
-      current right is strictly lower than their own, and never to a global SA
+    - OA of the org may grant up to organization_admin, but only to targets
+      whose current right is strictly lower than their own, and never to a
+      global SA
     """
     if new_right == userRights.system_admin:
         raise Forbidden()
     if v.is_sa:
         return
     caller_right = v.rights.get(org_id)
-    if caller_right is None or not caller_right <= userRights.organization_admin:
+    if (
+        caller_right is None
+        or not caller_right <= userRights.organization_admin
+    ):
         raise Forbidden()
     if new_right is not None and new_right < userRights.organization_admin:
         raise Forbidden()
@@ -358,7 +390,11 @@ def guarded(mutate):
             db.rollback()
             ref = uuid4().hex[:8]
             log.exception("mutation %s failed ref=%s", info.field_name, ref)
-            return payload(ok=False, info_text=f"Interner Fehler (Ref: {ref})", status_code=500)
+            return payload(
+                ok=False,
+                info_text=f"Interner Fehler (Ref: {ref})",
+                status_code=500,
+            )
     return wrapper
 
 
@@ -366,7 +402,8 @@ def guarded(mutate):
 # Visibility (queries and types) #
 ##################################
 def order_visible(v, order):
-    """Borrowers see their own orders, staff (IA+) the orders of their organisation, SA all."""
+    """Borrowers see their own orders, staff (IA+) the orders of their
+    organisation, SA all."""
     if v.user_id is None or order is None:
         return False
     if v.has(order.organization_id, userRights.inventory_admin):
@@ -375,25 +412,31 @@ def order_visible(v, order):
 
 
 def visible_orders_clause(v):
-    """SQL predicate on Order for the orders visible to v (None for SA = no restriction)."""
+    """SQL predicate on Order for the orders visible to v (None for SA = no
+    restriction)."""
     if v.is_sa:
         return None
     from sqlalchemy import or_
-    return or_(Order.users.any(User.user_id == v.user_id),
-               Order.organization_id.in_(v.orgs_with(userRights.inventory_admin)))
+    return or_(
+        Order.users.any(User.user_id == v.user_id),
+        Order.organization_id.in_(v.orgs_with(userRights.inventory_admin)),
+    )
 
 
 LEVEL_NONE, LEVEL_CONTACT, LEVEL_FULL = 0, 1, 2
 
 
 def user_level(v, user):
-    """How much of a user record v may see: full (self, SA, OA of a shared org), contact (staff), none."""
+    """How much of a user record v may see: full (self, SA, OA of a shared
+    org), contact (staff), none."""
     if v.user_id is None or user is None:
         return LEVEL_NONE
     if v.is_sa or v.user_id == user.user_id:
         return LEVEL_FULL
     oa_orgs = v.orgs_with(userRights.organization_admin)
-    if oa_orgs and any(m.organization_id in oa_orgs for m in user.organizations):
+    if oa_orgs and any(
+        m.organization_id in oa_orgs for m in user.organizations
+    ):
         return LEVEL_FULL
     if v.is_staff_anywhere():
         return LEVEL_CONTACT
