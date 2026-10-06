@@ -296,7 +296,6 @@ class PasswordResetToken(Base):
     token_hash          = Column(String(64),    primary_key = True)
     user_id             = Column(String(36),    ForeignKey('user.user_id'), nullable = False, index = True)
     expires_at          = Column(DateTime,      nullable = False)   # naive UTC
-    used_at             = Column(DateTime,      nullable = True)
 
     user                = relationship("User", back_populates = "reset_tokens")
 

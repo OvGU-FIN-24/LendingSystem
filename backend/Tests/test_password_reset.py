@@ -167,6 +167,26 @@ class PasswordResetTestCase(unittest.TestCase):
         self.assertEqual((again["ok"], again["statusCode"]), (False, 400))
         self.assertTrue(self.login(NEW_PASSWORD)[1])
 
+    def test_token_consumed_concurrently_rejected(self):
+        """A token read before another request consumed it is not usable."""
+        self.enable_mail()
+        self.request_reset()
+        token = self.token_from_mail()
+        stale = self.tokens()[0]
+        db.expunge(stale)
+        db.query(PasswordResetToken).delete()
+        db.commit()
+        real_get = db.get
+
+        def get(model, key):
+            return stale if model is PasswordResetToken else real_get(model, key)
+
+        with mock.patch.object(password_reset.db, "get", side_effect=get), \
+                self.assertRaises(password_reset.InvalidInput):
+            password_reset.confirm_reset(token, NEW_PASSWORD)
+        self.assertTrue(self.login(OLD_PASSWORD)[1])
+        self.assertEqual(self.epoch(), 0)
+
     def test_expired_token_rejected(self):
         self.enable_mail()
         self.request_reset()
