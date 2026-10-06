@@ -90,6 +90,16 @@ class A1QueryAccess(SecurityTestCase):
                         {"o": [self.ids["org_a"]]})
         self.assertEqual([u["userId"] for u in resp["data"]["filterUsers"]], [self.ids["carol"]])
 
+    def test_a1_5_object_filter_by_order_scoped(self):
+        query = """query($o: [String]) { filterPhysicalObjects(orders: $o) { physId } }"""
+        variables = {"o": [self.ids["order"]]}
+        for who in (None, "carol", "oa_b"):
+            client = self.client_for(who) if who else self.client_for()
+            self.assertEqual(self.gql(client, query, variables)["data"]["filterPhysicalObjects"], [])
+        for who in ("bob", "ia_a", "root"):
+            self.assertEqual(self.gql(self.client_for(who), query, variables)["data"]["filterPhysicalObjects"],
+                             [{"physId": self.ids["obj50"]}])
+
     def test_a1_5_order_scoping(self):
         query = "{ filterOrders { orderId } }"
         self.assertEqual(self.gql(self.client_for("carol"), query)["data"]["filterOrders"], [])

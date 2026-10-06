@@ -6,7 +6,7 @@ from authz import viewer, query_viewer, visible_orders_clause, PublicError
 from config import template_directory
 from models import orderStatus, userRights
 from schema import *
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 
 MAX_AVAILABILITY_IDS = 200
 
@@ -24,6 +24,16 @@ def _parse_order_status(value):
         return orderStatus[value.strip().lower()]
     except (KeyError, AttributeError):
         raise PublicError("Ungültiger Status")
+
+
+def _in_visible_orders(order_ids):
+    """Objects in one of the given orders, counting only orders the viewer
+    may see (an order id is no oracle for anonymous or foreign callers)."""
+    link = PhysicalObject_OrderModel.order_id.in_(order_ids)
+    clause = visible_orders_clause(viewer())
+    if clause is not None:
+        link = and_(link, PhysicalObject_OrderModel.order.has(clause))
+    return PhysicalObjectModel.orders.any(link)
 
 
 # Api Queries go here
@@ -256,7 +266,7 @@ class Query(graphene.ObjectType):
         if tags:
             query = query.filter(PhysicalObjectModel.tags.any(TagModel.tag_id.in_(tags)))
         if orders:
-            query = query.filter(PhysicalObjectModel.orders.any(PhysicalObject_OrderModel.order_id.in_(orders)))
+            query = query.filter(_in_visible_orders(orders))
         if groups:
             query = query.filter(PhysicalObjectModel.groups.any(GroupModel.group_id.in_(groups)))
         if organizations:
