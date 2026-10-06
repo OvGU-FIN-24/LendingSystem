@@ -236,6 +236,24 @@ class A2GrantBounds(SecurityTestCase):
                                       {"org": self.ids["org_a"], "user": self.ids["u"], "r": "customer"}),
                              "addUserToOrganization", 403)
 
+    def test_a2_8_root_organization_name_reserved(self):
+        rename = """mutation($org: String!, $name: String!) {
+          updateOrganization(organizationId: $org, name: $name) { ok statusCode } }"""
+        root_org = db.query(Organization).filter(Organization.name == "root_organization").one()
+        root_org_id = root_org.organization_id
+        db.add(Organization_User(organization_id=root_org_id, user_id=self.ids["oa_b"],
+                                 rights=userRights.organization_admin))
+        db.commit()
+        oa = self.client_for("oa_b")
+        self.assert_rejected(self.gql(oa, rename, {"org": root_org_id, "name": "Renamed"}),
+                             "updateOrganization", 403)
+        self.assert_rejected(self.gql(oa, rename, {"org": self.ids["org_b"], "name": "root_organization"}),
+                             "updateOrganization", 403)
+        db.remove()
+        self.assertEqual(db.query(Organization).get(root_org_id).name, "root_organization")
+        self.assertEqual(db.query(Organization).get(self.ids["org_b"]).name, "Org B")
+        self.assert_ok(self.gql(oa, rename, {"org": self.ids["org_b"], "name": "Org B2"}), "updateOrganization")
+
 
 class A4Orders(SecurityTestCase):
 

@@ -122,6 +122,9 @@ class update_organization(graphene.Mutation):
         require_right(organization_id, userRights.organization_admin)
         organization = _get_organization(organization_id)
 
+        # the root organisation name identifies global system admins
+        if name and ROOT_ORGANIZATION in (organization.name, name):
+            require_sa()
         phys_ids = clean_ids(physicalobjects)
         if phys_ids:
             # moving objects between organisations is reserved to system admins
