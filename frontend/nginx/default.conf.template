@@ -1,10 +1,15 @@
 # Rendered by the nginx image entrypoint (envsubst, only TRUSTED_* variables) into /etc/nginx/conf.d/default.conf.
 # TLS is terminated upstream (reverse proxy / load balancer or the optional Caddy overlay).
 
-# Keep the protocol reported by the upstream proxy; fall back to the local scheme
-map $http_x_forwarded_proto $fwd_proto {
-    default $http_x_forwarded_proto;
-    ""      $scheme;
+# Keep the protocol reported by the upstream proxy only if the request comes from TRUSTED_PROXY_CIDR;
+# otherwise use the local scheme
+geo $realip_remote_addr $from_trusted_proxy {
+    default 0;
+    ${TRUSTED_PROXY_CIDR} 1;
+}
+map "$from_trusted_proxy:$http_x_forwarded_proto" $fwd_proto {
+    "~^1:(?<proto>https?)$" $proto;
+    default                 $scheme;
 }
 
 # GraphQL POST bodies: only JSON and multipart (file upload); other types (e.g. HTML form posts) get 415
